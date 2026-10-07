@@ -1,0 +1,1 @@
+PASS shader-patch v1.6.3 chars=11706 stats=s=gtexture main=2/1/1 aux=1/0

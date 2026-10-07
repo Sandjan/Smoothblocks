@@ -1,0 +1,1 @@
+PASS atlas-map iterations=500 checks=727506 staticTexels=727506 animatedTexels=129511

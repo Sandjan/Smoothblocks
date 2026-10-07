@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "smoothblocks",
+  "version": "${version}",
+  "name": "Smooth Blocks",
+  "description": "Direct-to-target xBRZ terrain reconstruction for Sodium/Iris plus shader-based entity xBRZ; GUI/font/weather untouched.",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "de.oai.smoothblocks.SmoothBlocksClientEntrypoint"
+    ]
+  },
+  "license": "GPL-3.0-or-later",
+  "authors": [
+    "OpenAI"
+  ],
+  "mixins": [
+    {
+      "config": "smoothblocks.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.1",
+    "java": ">=25",
+    "sodium": ">=0.9.1"
+  }
+}

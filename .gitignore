@@ -1,0 +1,24 @@
+# Gradle and generated output
+.gradle/
+build/
+out/
+run/
+logs/
+crash-reports/
+
+# Local editors and operating systems
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.properties
+.codex/
+.agents/
+.aws/
