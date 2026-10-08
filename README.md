@@ -1,8 +1,14 @@
 # SmoothBlocks
 
-SmoothBlocks gives Minecraft's pixel textures a smoother, stylized look using two-stage xBRZ reconstruction. Version **1.0.0** targets **Minecraft 26.1.2 on Fabric**.
-
 ![SmoothBlocks world rendering with shaders](examples/image1.png)
+
+![SmoothBlocks blocks and held item](examples/image2.png)
+
+![SmoothBlocks entity and world texture examples](examples/image3.png)
+
+Screenshots may include other mods and shader effects; those are not bundled with SmoothBlocks.
+
+SmoothBlocks gives Minecraft's pixel textures a smoother, stylized look using two-stage xBRZ reconstruction. Version **1.0.0** targets **Minecraft 26.1.2 on Fabric**.
 
 ## Requirements and installation
 
@@ -21,10 +27,6 @@ Place `smoothblocks-1.0.0.jar` in your Minecraft instance's `mods` folder alongs
 - Water, lava, nether portal and fire effects retain linear filtering.
 - GUI text, menus, inventory/hotbar items and GUI entity previews retain their original rendering.
 - Generated flat items omit their artificial pixel side walls in world rendering. Their smooth front/back remain visible; they can appear very thin or disappear when viewed exactly edge-on. Actual 3D item models retain their geometry.
-
-![SmoothBlocks block textures and held item](examples/image2.png)
-
-Screenshots may include other mods and shader effects; those are not bundled with SmoothBlocks.
 
 ## Compatibility and performance
 
@@ -46,4 +48,4 @@ The build runs the portable regression checks. See [VALIDATION.md](VALIDATION.md
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for xBRZ/xBR attribution.
+GPL-3.0-or-later. Forks and redistribution must preserve copyright and license notices and comply with the GPL source-distribution requirements. Commercial use is permitted by this license. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for xBRZ/xBR attribution.
