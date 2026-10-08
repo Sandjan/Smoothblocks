@@ -1,6 +1,6 @@
 # Acceptance before stable 1.0
 
-Current candidate: 1.0.0-alpha.2. Keep the initial alpha.1 tag as a rollback baseline. Do not declare the two reported visual defects fully resolved until this matrix passes in-game.
+Current candidate: 1.0.0-alpha.3. Keep the initial alpha.1 tag as a rollback baseline. Do not declare the two reported visual defects fully resolved until this matrix passes in-game.
 
 ## Automated checks
 
@@ -13,7 +13,7 @@ Current candidate: 1.0.0-alpha.2. Keep the initial alpha.1 tag as a rollback bas
 For each of Fabric + Sodium, Fabric + Sodium + Iris with shaderpack disabled, and Iris with shaderpack enabled:
 
 1. Check static blocks, cutout leaves/grass, animated terrain, entities, player skins, armor and block entities.
-2. Rotate held tools/items and view their narrow sides. Check dropped items and item frames. Colors should interpolate while generated item coverage remains stable. Entirely smooth 3D item contours are outside this conservative fix.
+2. Rotate held tools/items and view their narrow sides. Check dropped items and item frames. Colors and alpha should interpolate smoothly; check side faces for holes or seams. Entirely smooth 3D item contours are outside this conservative fix.
 3. Check inventory, hotbar, creative menu, item tooltips, all GUI text, player preview and other GUI entity previews. Compare mod enabled/disabled: these must not change.
 4. Switch NEAREST/LINEAR/XBRZ and disable/re-enable the mod. Change shaderpack, disable/re-enable shaders, reload resources, change resource pack and reconnect to a world.
 5. Check changing skins/capes and dynamic textures. F7 reports entity metadata count/build count; looking around an unchanged scene must not continually increase the build count.

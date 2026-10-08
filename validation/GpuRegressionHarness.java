@@ -76,16 +76,23 @@ public final class GpuRegressionHarness {
             int meta = SmoothBlocksTextureMetadata.textureId(texture);
             require(meta != 0, "Resource-time metadata built");
             long builds = SmoothBlocksTextureMetadata.buildCount();
-            byte[] baseline = draw(original, source, meta, "", 0, 0);
-            byte[] gui = draw(entity, source, meta, "Entity", 0, 0);
+            byte[] baseline = draw(original, source, meta, "", 0);
+            byte[] gui = draw(entity, source, meta, "Entity", 0);
             require(Arrays.equals(baseline, gui), "GUI/off output must be byte-identical to original");
-            byte[] world = draw(entity, source, meta, "Entity", 2, 0);
+            byte[] world = draw(entity, source, meta, "Entity", 2);
             require(!Arrays.equals(world, baseline), "World must actually interpolate diagonal");
-            require(Arrays.equals(world, draw(irisEntity, source, meta, "Entity", 2, 0)), "Iris and vanilla reconstruction parity");
-            require(Arrays.equals(world, draw(terrain, source, meta, "", 2, 0)), "Terrain/entity common p1 parity");
+            require(Arrays.equals(world, draw(irisEntity, source, meta, "Entity", 2)), "Iris and vanilla reconstruction parity");
+            require(Arrays.equals(world, draw(terrain, source, meta, "", 2)), "Terrain/entity common p1 parity");
             checkDrawPolicy(entity, texture, world, baseline);
-            byte[] item = draw(entity, source, meta, "Entity", 2, 1);
-            for (int i = 3; i < item.length; i += 4) require(item[i] == baseline[i], "Item coverage changed at " + i);
+            int itemProgram = program(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/item", FRAGMENT));
+            byte[] item = draw(itemProgram, source, meta, "Entity", 2);
+            require(Arrays.equals(item, world), "Item RGBA must match the shared terrain/entity reconstruction");
+            boolean softenedAlpha = false;
+            for (int i = 3; i < item.length; i += 4) {
+                int alpha = item[i] & 255;
+                if (alpha > 0 && alpha < 255 && item[i] != baseline[i]) softenedAlpha = true;
+            }
+            require(softenedAlpha, "Item silhouette must interpolate alpha");
 
             for (int i = 0; i < 1000; i++) require(SmoothBlocksTextureMetadata.textureId(texture) == meta, "Stable lookup");
             SmoothBlocksTextureMetadata.refreshChanged();
@@ -168,7 +175,7 @@ public final class GpuRegressionHarness {
         bytes.flip();
         int metadata = SmoothBlocksXbrzMetadata.uploadMetadata(8, 4, bytes);
         int source = upload(atlas, 8, 4);
-        byte[] result = draw(entity, source, metadata, "Entity", 2, 0);
+        byte[] result = draw(entity, source, metadata, "Entity", 2);
         for (int y = 0; y < SIZE; y++) for (int x = 0; x < SIZE; x++) {
             int offset = (y * SIZE + x) * 4;
             require((result[offset + (x < SIZE / 2 ? 0 : 2)] & 255) == 255, "Sprite boundary contamination");
@@ -194,7 +201,7 @@ public final class GpuRegressionHarness {
         glDeleteTextures(source);
     }
 
-    private static byte[] draw(int program, int texture, int metadata, String prefix, int mode, int coverage) {
+    private static byte[] draw(int program, int texture, int metadata, String prefix, int mode) {
         glUseProgram(program);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -203,7 +210,6 @@ public final class GpuRegressionHarness {
         glBindTexture(GL_TEXTURE_2D, metadata);
         glUniform1i(glGetUniformLocation(program, "smoothblocks_" + prefix + "Meta"), 1);
         glUniform1i(glGetUniformLocation(program, "smoothblocks_" + prefix + "Mode"), mode);
-        glUniform1i(glGetUniformLocation(program, "smoothblocks_EntityPreserveCoverage"), coverage);
         glActiveTexture(GL_TEXTURE0);
         return readDraw();
     }

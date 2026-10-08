@@ -1,5 +1,9 @@
 # SmoothBlocks validation
 
+## 1.0.0-alpha.3 — 2026-10-08
+
+`build gpuRegression` passed. The existing item check now requires interpolated edge alpha and full RGBA parity with the shared terrain/entity kernel, replacing alpha.2's original-coverage assertion. GUI pixel parity and sprite-boundary checks still pass. In-game visual confirmation is pending.
+
 ## 1.0.0-alpha.2 — 2026-10-07
 
 Run `gradlew.bat build mixinRegression gpuRegression` with Java 25 (GPU task needs a local OpenGL 4.5 driver). Validated locally with Gradle 9.8.0, Fabric Loader 0.19.5 and Intel UHD Graphics.

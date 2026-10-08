@@ -17,7 +17,7 @@ public final class RegressionHarness {
             require(patched.contains("uniform usampler2D smoothblocks_EntityMeta"), "Precomputed metadata must be used");
             require(!patched.contains("smoothblocks_EStates("), "No fragment-time classifier");
             require(patched.contains("smoothblocks_EntityFetch"), "Shared bounded reconstruction");
-            require(patched.contains("smoothblocks_EntityPreserveCoverage"), "Item coverage guard");
+            require(!patched.contains("color.a = center.a"), "Item alpha must use the shared reconstruction");
         }
         for (String name : new String[]{"gui", "gui_item", "rendertype_text", "particle", "position_tex"}) {
             String source = "#version 330\nuniform sampler2D Sampler0; void main(){vec4 c=texture(Sampler0,vec2(0));}";

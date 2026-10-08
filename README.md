@@ -1,4 +1,4 @@
-# SmoothBlocks 1.0.0-alpha.2
+# SmoothBlocks 1.0.0-alpha.3
 
 Development alpha for Minecraft 26.1.2. Fabric and Sodium are required; Iris is optional. This is not the stable 1.0 release.
 
@@ -6,7 +6,7 @@ Alpha.2 addresses the shader-loading gap and item-atlas boundaries identified in
 
 Only world rendering is filtered: terrain, entities and world/held items. GUI, text, inventory/hotbar items and GUI entity previews retain their original rendering, even when they share a shader or texture with world objects.
 
-Entities now use resource-time metadata and the same reconstruction kernel as terrain. Texture changes invalidate the cached metadata; unchanged draws never classify edges. Items preserve original alpha coverage to keep their generated side faces intact. Mip-level 0 and the animated-atlas fallback are unchanged.
+Entities now use resource-time metadata and the same reconstruction kernel as terrain. Texture changes invalidate the cached metadata; unchanged draws never classify edges. World items use the same interpolated RGBA as terrain cutouts, including alpha at their edges. Mip-level 0 and the animated-atlas fallback are unchanged.
 
 Target: Minecraft 26.1.2, Fabric Loader 0.19.5, Sodium/Iris, Java 25.
 
@@ -49,7 +49,7 @@ Build on the Java-25 machine:
 
 On Linux/macOS, use `./gradlew clean build` with Java 25.
 
-Expected jar: `build/libs/smoothblocks-1.0.0-alpha.2.jar`.
+Expected jar: `build/libs/smoothblocks-1.0.0-alpha.3.jar`.
 
 `build` includes the portable regression harnesses. Additional local checks:
 

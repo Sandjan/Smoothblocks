@@ -764,22 +764,10 @@ public final class SmoothBlocksShaderPatch {
                 .replace(TERRAIN_MARKER, ENTITY_MARKER)
                 .replace("smoothblocks_", "smoothblocks_Entity");
         return shared + """
-                uniform int smoothblocks_EntityPreserveCoverage;
-
                 vec4 smoothblocks_EntityReconstruct(sampler2D source, vec2 uv) {
                     vec2 pixelSize = 1.0 / vec2(textureSize(source, 0));
-                    vec4 color = smoothblocks_EntityXbrzDirect(source, uv,
+                    return smoothblocks_EntityXbrzDirect(source, uv,
                             smoothblocks_EntityLocalScale(pixelSize, dFdx(uv), dFdy(uv)));
-                    // Generated item side faces describe the original pixel silhouette.
-                    // Preserve that coverage rather than punching holes in the extrusion.
-                    if (smoothblocks_EntityPreserveCoverage != 0 && smoothblocks_EntityDebug == 0) {
-                        ivec2 size = textureSize(source, 0);
-                        ivec2 p = clamp(ivec2(floor(uv * vec2(size))), ivec2(0), size - 1);
-                        vec4 center = texelFetch(source, p, 0);
-                        if (color.a <= 1e-6) color.rgb = center.rgb;
-                        color.a = center.a;
-                    }
-                    return color;
                 }
 
                 vec4 smoothblocks_EntitySample(sampler2D source, vec2 uv) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-alpha.3 — 2026-10-08
+
+- Remove the item-only override that restored unfiltered alpha after xBRZ. World/held items now use the same premultiplied RGBA reconstruction as terrain cutouts such as grass.
+- Keep sprite boundaries, GUI exclusion and mip-level policy unchanged.
+- Update the existing GPU regression to verify interpolated item alpha and RGBA parity with the shared kernel. In-game side-face appearance still needs confirmation.
+
 ## 1.0.0-alpha.2 — 2026-10-07
 
 - Patch Minecraft's actual shader compilation cache, including the dedicated item shader.

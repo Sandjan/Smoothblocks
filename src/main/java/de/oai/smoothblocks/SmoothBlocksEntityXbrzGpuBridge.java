@@ -9,7 +9,7 @@ import java.util.Map;
 public final class SmoothBlocksEntityXbrzGpuBridge {
     private SmoothBlocksEntityXbrzGpuBridge() {}
     public static final String MODE_UNIFORM = "smoothblocks_EntityMode";
-    private record Uniforms(int mode, int metadata, int debug, int coverage, int[] samplers) {}
+    private record Uniforms(int mode, int metadata, int debug, int[] samplers) {}
     private static final Map<Integer, Uniforms> PROGRAMS = new ConcurrentHashMap<>();
     private static final SmoothBlocksMetadataBinding BINDING = new SmoothBlocksMetadataBinding();
 
@@ -38,17 +38,15 @@ public final class SmoothBlocksEntityXbrzGpuBridge {
         GL20C.glUniform1i(u.metadata, unit);
         GL20C.glUniform1i(u.mode, mode);
         if (u.debug >= 0) GL20C.glUniform1i(u.debug, world ? SmoothBlocksClient.getDebugViewCode() : 0);
-        if (u.coverage >= 0) GL20C.glUniform1i(u.coverage, SmoothBlocksTextureMetadata.isItemAtlas(source) ? 1 : 0);
         if (world) SmoothBlocksClient.noteEntityXbrzProgramSetup(mode);
     }
 
     private static Uniforms inspect(int program) {
         int mode = GL20C.glGetUniformLocation(program, MODE_UNIFORM);
-        if (mode < 0) return new Uniforms(-1, -1, -1, -1, new int[0]);
+        if (mode < 0) return new Uniforms(-1, -1, -1, new int[0]);
         int metadata = GL20C.glGetUniformLocation(program, "smoothblocks_EntityMeta");
         return new Uniforms(mode, metadata,
                 GL20C.glGetUniformLocation(program, "smoothblocks_EntityDebug"),
-                GL20C.glGetUniformLocation(program, "smoothblocks_EntityPreserveCoverage"),
                 SmoothBlocksMetadataBinding.findSamplerLocations(program, metadata));
     }
 }
