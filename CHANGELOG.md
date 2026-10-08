@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-alpha.6 — 2026-10-08
+
+- Replace the version-specific Sodium baker hook that broke generated model loading with a builder-scoped side marker around Minecraft's original side-bake call. Works when Sodium replaces that call's body; front/back are never marked.
+- Verify a complete generated-item bake with actual Sodium 0.9.1: both faces retained, all four test side walls omitted only in world XBRZ.
+
 ## 1.0.0-alpha.5 — 2026-10-08
 
 - Tag side walls from Sodium's replacement item model builder, which bypasses the vanilla tagging hook.

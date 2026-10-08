@@ -20,7 +20,7 @@
     "BakedQuadMixin",
     "ItemModelGeneratorMixin",
     "ItemFeatureRendererMixin",
-    "SodiumItemModelBuilderMixin",
+    "QuadCollectionBuilderMixin",
     "SodiumItemRenderContextMixin",
     "ShaderManagerMixin"
   ],

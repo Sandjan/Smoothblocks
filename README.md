@@ -1,4 +1,4 @@
-# SmoothBlocks 1.0.0-alpha.5
+# SmoothBlocks 1.0.0-alpha.6
 
 Development alpha for Minecraft 26.1.2. Fabric and Sodium are required; Iris is optional. This is not the stable 1.0 release.
 
@@ -51,7 +51,7 @@ Build on the Java-25 machine:
 
 On Linux/macOS, use `./gradlew clean build` with Java 25.
 
-Expected jar: `build/libs/smoothblocks-1.0.0-alpha.5.jar`.
+Expected jar: `build/libs/smoothblocks-1.0.0-alpha.6.jar`.
 
 `build` includes the portable regression harnesses. Additional local checks:
 

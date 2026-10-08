@@ -82,6 +82,10 @@ tasks.register('mixinSmokeJar', Jar) {
     destinationDirectory = layout.buildDirectory.dir('validation')
     from(sourceSets.validation.output)
     from('validation/mixin-smoke')
+    inputs.property 'realSodium', project.hasProperty('smokeMods')
+    if (project.hasProperty('smokeMods')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.contains('"provides"') ? '' : line } }
+    }
 }
 tasks.register('mixinRegression', JavaExec) {
     dependsOn tasks.named('mixinSmokeJar'), tasks.named('jar')
@@ -95,6 +99,11 @@ tasks.register('mixinRegression', JavaExec) {
     args '--gameDir', layout.buildDirectory.dir('mixin-smoke-run').get().asFile.absolutePath,
             '--version', 'SmoothBlocks-validation'
     doFirst {
+        if (project.hasProperty('smokeMods')) {
+            systemProperty 'fabric.addMods', tasks.named('mixinSmokeJar').get().archiveFile.get().asFile.absolutePath +
+                    File.pathSeparator + project.property('smokeMods')
+            systemProperty 'smoothblocks.testSodiumItems', 'true'
+        }
         layout.buildDirectory.dir('mixin-smoke-run').get().asFile.mkdirs()
         layout.buildDirectory.dir('resources/validation').get().asFile.mkdirs()
     }

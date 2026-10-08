@@ -1,5 +1,9 @@
 # SmoothBlocks validation
 
+## 1.0.0-alpha.6 — 2026-10-08
+
+Build and targeted Fabric launch with actual Sodium 0.9.1 passed. Complete generated-item bake retains two main faces and tags all four test side walls; world omission and unchanged GUI geometry verified. Sodium ItemRenderContext mixin also transforms successfully. In-game appearance remains unverified. Optional test: mixinRegression -PsmokeMods=<absolute Sodium jar path>.
+
 ## 1.0.0-alpha.5 — 2026-10-08
 
 Offline build and existing regression checks passed. Sodium source/bytecode confirms that its replacement baker bypasses vanilla side tagging; alpha.5 covers that baker and the separate Fabric Renderer API emission path. No in-game visual verification performed.
