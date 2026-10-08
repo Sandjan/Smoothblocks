@@ -83,6 +83,7 @@ public final class GpuRegressionHarness {
             require(!Arrays.equals(world, baseline), "World must actually interpolate diagonal");
             require(Arrays.equals(world, draw(irisEntity, source, meta, "Entity", 2)), "Iris and vanilla reconstruction parity");
             require(Arrays.equals(world, draw(terrain, source, meta, "", 2)), "Terrain/entity common p1 parity");
+            animatedFrames(entity, source, pixels, world);
             checkDrawPolicy(entity, texture, world, baseline);
             int itemProgram = program(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/item", FRAGMENT));
             byte[] item = draw(itemProgram, source, meta, "Entity", 2);
@@ -221,6 +222,54 @@ public final class GpuRegressionHarness {
         byte[] output = new byte[bytes.remaining()];
         bytes.get(output);
         return output;
+    }
+
+    private static void animatedFrames(int program, int source, int[] first, byte[] expected) {
+        var id = net.minecraft.resources.Identifier.withDefaultNamespace("block/test_animation");
+        var image = new com.mojang.blaze3d.platform.NativeImage(8, 16, true);
+        int[] second = new int[64];
+        for (int i = 0; i < 64; i++) {
+            second[i] = first[63 - i];
+            image.setPixel(i % 8, i / 8, first[i]);
+            image.setPixel(i % 8, 8 + i / 8, second[i]);
+        }
+        var animation = new net.minecraft.client.resources.metadata.animation.AnimationMetadataSection(
+                java.util.Optional.empty(), java.util.Optional.empty(), java.util.Optional.empty(), 2, true);
+        try (var contents = new net.minecraft.client.renderer.texture.SpriteContents(id,
+                new net.minecraft.client.resources.metadata.animation.FrameSize(8, 8), image,
+                java.util.Optional.of(animation), java.util.List.of(), java.util.Optional.empty())) {
+            class Sprite extends net.minecraft.client.renderer.texture.TextureAtlasSprite {
+                Sprite() { super(id, contents, 8, 8, 0, 0, 0); }
+            }
+            var sprite = new Sprite();
+            var preparation = new net.minecraft.client.renderer.texture.SpriteLoader.Preparations(
+                    8, 8, 0, sprite, java.util.Map.of(id, sprite), java.util.concurrent.CompletableFuture.completedFuture(null));
+            short[] extra = SmoothBlocksAnimatedMetadata.prepare(preparation);
+            require(extra.length <= 5 + 4 * 64, "Duplicate frame metadata shares storage");
+            require(SmoothBlocksAnimatedMetadata.frameAddress(sprite, 0, 1) >= 5
+                    && SmoothBlocksAnimatedMetadata.frameAddress(sprite, 1, 1) >= 5, "Temporal intermediate steps precomputed");
+            int height = 8 + (extra.length + 7) / 8;
+            ByteBuffer bytes = BufferUtils.createByteBuffer(8 * height * 2);
+            for (int i = 0; i < 64; i++) bytes.putShort(i * 2, (short) SmoothBlocksAnimatedMetadata.marker(sprite));
+            for (int i = 0; i < extra.length; i++) bytes.putShort((64 + i) * 2, extra[i]);
+            int animated = SmoothBlocksXbrzMetadata.uploadMetadata(8, height, bytes);
+            require(Arrays.equals(expected, draw(program, source, animated, "Entity", 2)), "Frame pointer resolves identical xBRZ");
+            ByteBuffer pointer = BufferUtils.createByteBuffer(4);
+            int nextAddress = SmoothBlocksAnimatedMetadata.frameAddress(sprite, 1, 0);
+            pointer.putInt(0, nextAddress);
+            SmoothBlocksXbrzMetadata.updatePointer(animated, 3, 8, 8, pointer);
+            writePixels(source, second, 8, 8);
+            short[] direct = SmoothBlocksXbrzCore.classifyArgb(8, 8, second).metadata();
+            ByteBuffer directBytes = BufferUtils.createByteBuffer(128);
+            for (short value : direct) directBytes.putShort(value);
+            directBytes.flip();
+            int reference = SmoothBlocksXbrzMetadata.uploadMetadata(8, 8, directBytes);
+            require(Arrays.equals(draw(program, source, reference, "Entity", 2),
+                    draw(program, source, animated, "Entity", 2)), "Four-byte pointer switches to the second frame");
+            writePixels(source, first, 8, 8);
+            glDeleteTextures(animated); glDeleteTextures(reference);
+            SmoothBlocksAnimatedMetadata.clear();
+        }
     }
 
     private static int upload(int[] pixels, int width, int height) {

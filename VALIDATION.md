@@ -1,5 +1,9 @@
 # SmoothBlocks validation
 
+## 1.0.0-alpha.7 — 2026-10-08
+
+Build, existing regressions and Mixin transformation passed. One additional GPU fixture prepares real SpriteContents animation frames and intermediate steps, verifies frame-metadata indirection matches direct xBRZ, and switches frames using only a four-byte pointer update. Identical metadata shares storage. In-game animation appearance and FPS remain unverified.
+
 ## 1.0.0-alpha.6 — 2026-10-08
 
 Build and targeted Fabric launch with actual Sodium 0.9.1 passed. Complete generated-item bake retains two main faces and tags all four test side walls; world omission and unchanged GUI geometry verified. Sodium ItemRenderContext mixin also transforms successfully. In-game appearance remains unverified. Optional test: mixinRegression -PsmokeMods=<absolute Sodium jar path>.

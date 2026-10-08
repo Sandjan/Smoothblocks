@@ -11,6 +11,7 @@
     "KeyboardHandlerMixin",
     "ReloadableTextureMixin",
     "TextureAtlasMixin",
+    "SpriteAnimationStateMixin",
     "GlCommandEncoderMixin",
     "GameRendererMixin",
     "GuiRendererMixin",

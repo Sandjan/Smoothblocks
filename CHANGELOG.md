@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-alpha.7 — 2026-10-08
+
+- Precompute xBRZ metadata for animated block frames and quantized temporal intermediate steps at atlas load. Repeated frame states and identical metadata share storage.
+- Keep immutable frame metadata in the existing GPU metadata texture; update only a four-byte frame address when needed. No live classification, frame readback or frame-metadata copying.
+- Keep animated water, lava, nether portal and fire effects LINEAR; GUI unchanged. No memory-based LINEAR fallback for blocks. F7 reports additional frame metadata bytes.
+
 ## 1.0.0-alpha.6 — 2026-10-08
 
 - Replace the version-specific Sodium baker hook that broke generated model loading with a builder-scoped side marker around Minecraft's original side-bake call. Works when Sodium replaces that call's body; front/back are never marked.

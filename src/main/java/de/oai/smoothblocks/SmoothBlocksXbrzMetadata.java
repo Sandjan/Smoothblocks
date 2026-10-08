@@ -48,6 +48,7 @@ public final class SmoothBlocksXbrzMetadata {
             GL11C.GL_UNPACK_SWAP_BYTES,
             GL11C.GL_UNPACK_LSB_FIRST
     };
+    private static final int[] POINTER_UNPACK = new int[UNPACK_PARAMETERS.length];
 
     private static volatile int textureId;
     private static volatile int atlasWidth;
@@ -112,15 +113,20 @@ public final class SmoothBlocksXbrzMetadata {
             return;
         }
 
-        ByteBuffer data = MemoryUtil.memAlloc((int) byteCountLong);
+        short[] extra = SmoothBlocksAnimatedMetadata.prepare(preparations);
+        int metadataHeight = Math.addExact(height, (extra.length + width - 1) / width);
+        if (metadataHeight > GL11C.glGetInteger(GL11C.GL_MAX_TEXTURE_SIZE))
+            throw new IllegalStateException("Animated block metadata exceeds GPU texture size");
+        ByteBuffer data = MemoryUtil.memAlloc(Math.multiplyExact(Math.multiplyExact(width, metadataHeight), 2));
         try {
             // 0xFFFE = not sprite content / unavailable. Static sprite content is NEVER
-            // intentionally LINEAR. 0xFFFF is the sole LINEAR marker and is written only
-            // for animated sprites whose pass-0 metadata would become stale per frame.
+            // intentionally LINEAR. 0xFFFF retains the linear path for animated effects;
+            // animated blocks instead point to immutable, prepared frame metadata.
             for (int i = 0; i < data.capacity(); i += 2) {
                 data.put(i,     (byte) 0xFE);
                 data.put(i + 1, (byte) 0xFF);
             }
+            for (int i = 0; i < extra.length; i++) putMeta(data, (width * height + i) * 2, extra[i] & 0xFFFF);
 
             long sprites = 0;
             long texels = 0;
@@ -170,8 +176,9 @@ public final class SmoothBlocksXbrzMetadata {
                 }
 
                 if (sprite.contents().isAnimated()) {
-                    fillRect(data, width, ox, oy, sw, sh, SmoothBlocksXbrzClassifier.META_ANIMATED_LINEAR);
-                    animated++;
+                    int marker = SmoothBlocksAnimatedMetadata.marker(sprite);
+                    fillRect(data, width, ox, oy, sw, sh, marker);
+                    if (marker == SmoothBlocksXbrzClassifier.META_ANIMATED_LINEAR) animated++;
                     continue;
                 }
 
@@ -206,7 +213,7 @@ public final class SmoothBlocksXbrzMetadata {
                 edgeTexels += classified.stats().texelsWithEdge();
             }
 
-            long uploadDiff = replaceGlTexture(width, height, data);
+            long uploadDiff = replaceGlTexture(width, metadataHeight, data);
             atlasWidth = width;
             atlasHeight = height;
             classifiedSprites = sprites;
@@ -368,6 +375,35 @@ public final class SmoothBlocksXbrzMetadata {
         return tex;
     }
 
+    /** Update only the two address cells, preserving unpack/PBO state and all texture bindings. */
+    static void updatePointer(int cell, int width, int baseHeight, ByteBuffer address) {
+        updatePointer(textureId, cell, width, baseHeight, address);
+    }
+
+    static void updatePointer(int texture, int cell, int width, int baseHeight, ByteBuffer address) {
+        int previousBuffer = GL11C.glGetInteger(GL21C.GL_PIXEL_UNPACK_BUFFER_BINDING);
+        int[] unpack = POINTER_UNPACK;
+        for (int i = 0; i < unpack.length; i++) unpack[i] = GL11C.glGetInteger(UNPACK_PARAMETERS[i]);
+        try {
+            GL15C.glBindBuffer(GL21C.GL_PIXEL_UNPACK_BUFFER, 0);
+            for (int i = 0; i < unpack.length; i++) GL11C.glPixelStorei(UNPACK_PARAMETERS[i], i == 0 ? 1 : 0);
+            address.position(0).limit(4);
+            int x = cell % width, y = baseHeight + cell / width;
+            if (x + 1 < width) {
+                GL45C.glTextureSubImage2D(texture, 0, x, y, 2, 1, GL30C.GL_RG_INTEGER, GL11C.GL_UNSIGNED_BYTE, address);
+            } else {
+                address.limit(2);
+                GL45C.glTextureSubImage2D(texture, 0, x, y, 1, 1, GL30C.GL_RG_INTEGER, GL11C.GL_UNSIGNED_BYTE, address);
+                address.position(2).limit(4);
+                GL45C.glTextureSubImage2D(texture, 0, 0, y + 1, 1, 1, GL30C.GL_RG_INTEGER, GL11C.GL_UNSIGNED_BYTE, address);
+            }
+        } finally {
+            address.position(0).limit(4);
+            for (int i = 0; i < unpack.length; i++) GL11C.glPixelStorei(UNPACK_PARAMETERS[i], unpack[i]);
+            GL15C.glBindBuffer(GL21C.GL_PIXEL_UNPACK_BUFFER, previousBuffer);
+        }
+    }
+
     private static long verifyUpload(int tex, ByteBuffer expected) {
         ByteBuffer actual = MemoryUtil.memAlloc(expected.capacity());
         int previousBuffer = GL11C.glGetInteger(GL21C.GL_PIXEL_PACK_BUFFER_BINDING);
@@ -399,6 +435,7 @@ public final class SmoothBlocksXbrzMetadata {
     }
 
     public static synchronized void close() {
+        SmoothBlocksAnimatedMetadata.clear();
         int old = textureId;
         textureId = 0;
         atlasWidth = 0;
@@ -455,6 +492,7 @@ public final class SmoothBlocksXbrzMetadata {
                 + " overlap=" + overlappingTexels
                 + " uploadDiff=" + uploadMismatchedBytes
                 + " animatedLinear=" + animatedFallbackSprites
+                + " animatedMetaBytes=" + SmoothBlocksAnimatedMetadata.preparedBytes()
                 + " buildMs=" + String.format(java.util.Locale.ROOT, "%.2f", buildNanos / 1_000_000.0);
     }
 

@@ -507,9 +507,28 @@ public final class SmoothBlocksShaderPatch {
                     return state >= 2u && state <= 5u;
                 }
 
-                uint smoothblocks_LoadMeta(ivec2 texel) {
+                uint smoothblocks_RawMeta(ivec2 texel) {
                     uvec4 raw = texelFetch(smoothblocks_Meta, texel, 0);
                     return raw.r | (raw.g << 8u);
+                }
+
+                uint smoothblocks_ExtraMeta(uint index, ivec2 sourceSize) {
+                    return smoothblocks_RawMeta(ivec2(int(index % uint(sourceSize.x)),
+                        sourceSize.y + int(index / uint(sourceSize.x))));
+                }
+
+                uint smoothblocks_LoadMeta(ivec2 texel, ivec2 sourceSize) {
+                    uint meta = smoothblocks_RawMeta(texel);
+                    // State 7 is unused by xBRZ; its remaining bits address a sprite descriptor.
+                    if ((meta & 7u) != 7u || meta == smoothblocks_META_ANIMATED) return meta;
+                    uint descriptor = (meta >> 3u) * 5u;
+                    ivec2 origin = ivec2(smoothblocks_ExtraMeta(descriptor, sourceSize),
+                                         smoothblocks_ExtraMeta(descriptor + 1u, sourceSize));
+                    uint width = smoothblocks_ExtraMeta(descriptor + 2u, sourceSize);
+                    uint address = smoothblocks_ExtraMeta(descriptor + 3u, sourceSize)
+                        | (smoothblocks_ExtraMeta(descriptor + 4u, sourceSize) << 16u);
+                    ivec2 local = texel - origin;
+                    return smoothblocks_ExtraMeta(address + uint(local.y) * width + uint(local.x), sourceSize);
                 }
 
                 // Explicit level-0 bilinear filtering for animated atlas sprites. XBRZ
@@ -565,13 +584,13 @@ public final class SmoothBlocksShaderPatch {
                     ivec2 centerTexel = clamp(ivec2(floor(texelCoord)), ivec2(0), sourceSize - ivec2(1));
 
                     ivec2 metaSize = textureSize(smoothblocks_Meta, 0);
-                    if (any(notEqual(sourceSize, metaSize))) {
+                    if (sourceSize.x != metaSize.x || sourceSize.y > metaSize.y) {
                         // Debug PATH/EDGES: red = atlas/meta size mismatch.
                         if (smoothblocks_Debug != 0) return vec4(1.0, 0.0, 0.0, 1.0);
                         return texelFetch(source, centerTexel, 0);
                     }
 
-                    uint meta = smoothblocks_LoadMeta(centerTexel);
+                    uint meta = smoothblocks_LoadMeta(centerTexel, sourceSize);
                     if (meta == smoothblocks_META_ANIMATED) {
                         // Yellow = intentional animated-only bilinear path.
                         if (smoothblocks_Debug != 0) return vec4(1.0, 1.0, 0.0, 1.0);

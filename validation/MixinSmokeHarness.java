@@ -10,6 +10,7 @@ public final class MixinSmokeHarness implements PreLaunchEntrypoint {
                     "net.minecraft.client.resources.model.geometry.BakedQuad",
                     "net.minecraft.client.resources.model.geometry.QuadCollection$Builder",
                     "net.minecraft.client.resources.model.cuboid.ItemModelGenerator",
+                    "net.minecraft.client.renderer.texture.SpriteContents$AnimationState",
                     "net.minecraft.client.renderer.feature.ItemFeatureRenderer",
                     "net.minecraft.client.renderer.ShaderManager$CompilationCache",
                     "net.minecraft.client.renderer.GameRenderer",
