@@ -1,10 +1,10 @@
-SmoothBlocks 1.0.0-alpha.1 - initial versioned alpha
+SmoothBlocks 1.0.0-alpha.2 - world-only precomputed entity/item reconstruction
 
 This source package targets Java 25 / Minecraft 26.1.2.
 
 The original development environment used JDK 21 for dependency-free checks.
 On 2026-10-07 a complete offline build with Java 25 and Gradle 9.8.0 passed.
-This alpha preserves the internal 1.6.3 rendering implementation and known bugs.
+Alpha.2 adds the integration fixes and regression tests described in CHANGELOG.md.
 
 Validated locally:
 - 1,000 random opaque images / 261,078 texels: metadata bit-identical to v1.6.2.
@@ -17,4 +17,4 @@ Build on the target machine:
   .\gradlew.bat clean build
 
 Expected output:
-  build/libs/smoothblocks-1.0.0-alpha.1.jar
+  build/libs/smoothblocks-1.0.0-alpha.2.jar

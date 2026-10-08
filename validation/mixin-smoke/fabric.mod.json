@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "smoothblocks_validation",
+  "version": "0.9.1",
+  "name": "SmoothBlocks transform test (never distribute)",
+  "environment": "client",
+  "provides": ["sodium"],
+  "entrypoints": {"preLaunch": ["de.oai.smoothblocks.MixinSmokeHarness"]}
+}

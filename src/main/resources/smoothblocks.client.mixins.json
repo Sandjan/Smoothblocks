@@ -12,7 +12,11 @@
     "ReloadableTextureMixin",
     "TextureAtlasMixin",
     "GlCommandEncoderMixin",
-    "IrisExtendedShaderMixin",
+    "GameRendererMixin",
+    "GuiRendererMixin",
+    "GlRenderPassMixin",
+    "TextureManagerMixin",
+    "GlTextureMixin",
     "ShaderManagerMixin"
   ],
   "injectors": {

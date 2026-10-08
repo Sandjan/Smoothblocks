@@ -14,8 +14,8 @@ import java.util.Map;
 
 /**
  * Terrain is patched only after Iris has completed its Sodium/texture AST transforms.
- * Entity compatibility keeps the older two-phase path for now because it does not use
- * the terrain metadata atlas and is unrelated to the atlas-association bug.
+ * Entity samples retain the two-phase marker path, then receive the same precomputed
+ * metadata reconstruction kernel as terrain in a separate uniform namespace.
  */
 @Pseudo
 @Mixin(targets = "net.irisshaders.iris.pipeline.transform.TransformPatcher")

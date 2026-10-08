@@ -1,8 +1,12 @@
-# SmoothBlocks 1.0.0-alpha.1
+# SmoothBlocks 1.0.0-alpha.2
 
-Initial versioned alpha, based on the internal 1.6.3 development snapshot. This is not the stable 1.0 release.
+Development alpha for Minecraft 26.1.2. Fabric and Sodium are required; Iris is optional. This is not the stable 1.0 release.
 
-Known issues: entity interpolation without an active shaderpack and malformed edges on held items. See [ANALYSE-1.0.md](ANALYSE-1.0.md) for the investigation and [CHANGELOG.md](CHANGELOG.md) for release history.
+Alpha.2 addresses the shader-loading gap and item-atlas boundaries identified in the initial review. In-game acceptance is still pending; see [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md), [VALIDATION.md](VALIDATION.md) and [CHANGELOG.md](CHANGELOG.md).
+
+Only world rendering is filtered: terrain, entities and world/held items. GUI, text, inventory/hotbar items and GUI entity previews retain their original rendering, even when they share a shader or texture with world objects.
+
+Entities now use resource-time metadata and the same reconstruction kernel as terrain. Texture changes invalidate the cached metadata; unchanged draws never classify edges. Items preserve original alpha coverage to keep their generated side faces intact. Mip-level 0 and the animated-atlas fallback are unchanged.
 
 Target: Minecraft 26.1.2, Fabric Loader 0.19.5, Sodium/Iris, Java 25.
 
@@ -16,7 +20,7 @@ The standalone Java lab remains the source of truth for opaque Freescale xBRZ. v
 - **F8**: enable/disable SmoothBlocks
 - **F9**: reset runtime counters
 
-## Main v1.6.3 changes
+## Inherited algorithm (internal v1.6.3 baseline)
 
 1. **Alpha is now part of xBRZ edge classification.** The distance follows the established xBRZ alpha construction: the lower alpha weights the YCbCr RGB distance and the alpha difference is added directly. Two opaque pixels therefore use exactly the old validated RGB distance; two fully transparent pixels compare equal regardless of hidden RGB.
 2. **Pass 1 reconstructs RGBA, not RGB-only.** xBRZ blends premultiplied RGB + alpha and converts back to straight alpha at the output. This smooths grass/leaves/cutout silhouettes without black transparent fringes. Opaque sprites reduce exactly to the old RGB path.
@@ -45,4 +49,13 @@ Build on the Java-25 machine:
 
 On Linux/macOS, use `./gradlew clean build` with Java 25.
 
-Expected jar: `build/libs/smoothblocks-1.0.0-alpha.1.jar`.
+Expected jar: `build/libs/smoothblocks-1.0.0-alpha.2.jar`.
+
+`build` includes the portable regression harnesses. Additional local checks:
+
+```powershell
+.\gradlew.bat mixinRegression
+.\gradlew.bat gpuRegression
+```
+
+The first exits before Minecraft opens a window and validates vanilla Mixin targets. The second requires OpenGL 4.5 and uses a hidden test window. The test-only dependency alias in `build/validation` is not a mod for distribution.

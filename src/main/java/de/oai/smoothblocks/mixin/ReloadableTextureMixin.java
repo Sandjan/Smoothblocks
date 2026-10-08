@@ -2,6 +2,7 @@ package de.oai.smoothblocks.mixin;
 
 import de.oai.smoothblocks.SmoothBlocksAlphaEdgeRepair;
 import de.oai.smoothblocks.SmoothBlocksClient;
+import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
 import net.minecraft.client.renderer.texture.ReloadableTexture;
 import net.minecraft.client.renderer.texture.TextureContents;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,6 +18,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ReloadableTexture.class)
 public abstract class ReloadableTextureMixin {
+    @Inject(method = "apply", at = @At("TAIL"))
+    private void smoothblocks$prepareMetadata(TextureContents contents, CallbackInfo ci) {
+        String path = resourceId().getPath();
+        if (path.startsWith("textures/entity/") || path.startsWith("textures/models/armor/")
+                || path.startsWith("textures/equipment/")) {
+            var texture = ((ReloadableTexture) (Object) this).getTexture();
+            SmoothBlocksTextureMetadata.forget(texture);
+            SmoothBlocksTextureMetadata.registerTexture(texture);
+        }
+    }
+
     @Shadow
     public abstract net.minecraft.resources.Identifier resourceId();
 

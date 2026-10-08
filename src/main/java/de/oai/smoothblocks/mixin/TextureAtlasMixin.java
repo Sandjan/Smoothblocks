@@ -3,6 +3,7 @@ package de.oai.smoothblocks.mixin;
 import de.oai.smoothblocks.SmoothBlocksEntityXbrzGpuBridge;
 import de.oai.smoothblocks.SmoothBlocksXbrzGpuBridge;
 import de.oai.smoothblocks.SmoothBlocksXbrzMetadata;
+import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
 import net.minecraft.client.renderer.texture.SpriteLoader;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,6 +18,10 @@ public abstract class TextureAtlasMixin {
     private void smoothblocks$buildXbrzMetadata(SpriteLoader.Preparations preparations, CallbackInfo ci) {
         TextureAtlas self = (TextureAtlas) (Object) this;
         if (!TextureAtlas.LOCATION_BLOCKS.equals(self.location())) {
+            if (!TextureAtlas.LOCATION_PARTICLES.equals(self.location())
+                    && !self.location().getPath().contains("gui")) {
+                SmoothBlocksTextureMetadata.registerAtlas(self, preparations);
+            }
             return;
         }
 

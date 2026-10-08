@@ -17,7 +17,7 @@ public final class SmoothBlocksShaderPatch {
     private static final String TERRAIN_CALL = "smoothblocks_TerrainSample";
     private static final String TERRAIN_GRAD_CALL = "smoothblocks_TerrainSampleGrad";
     private static final String TERRAIN_LOD_CALL = "smoothblocks_TerrainSampleLod";
-    private static final String ENTITY_MARKER = "SMOOTHBLOCKS_ENTITY_XBRZ_V8";
+    private static final String ENTITY_MARKER = "SMOOTHBLOCKS_ENTITY_XBRZ_V9";
     private static final String ENTITY_CALL = "smoothblocks_EntitySample";
 
     // Compile-time Iris coverage diagnostics. These are intentionally aggregate counters
@@ -133,7 +133,7 @@ public final class SmoothBlocksShaderPatch {
         return rewriteDiffuseSamples(source, ENTITY_CALL);
     }
 
-    /** Iris phase 2 for entities: dynamic xBRZ classification needs no extra texture/sampler. */
+    /** Iris phase 2: inject the common p1 kernel after Iris has rewritten the source. */
     public static String finishIrisEntityFragment(String source) {
         if (source == null || source.contains(ENTITY_MARKER) || !source.contains(ENTITY_CALL + "(")) return source;
         return injectAfterHeader(source, entityShaderHelpers());
@@ -150,8 +150,9 @@ public final class SmoothBlocksShaderPatch {
     public static boolean isEntityShaderName(String shaderName) {
         if (shaderName == null) return false;
         String s = shaderName.toLowerCase(Locale.ROOT);
+        if (s.contains("gui") || s.contains("text") || s.contains("particle")) return false;
         return s.contains("entit") || s.contains("armor") || s.contains("eyes")
-                || s.contains("hand") || s.contains("energy_swirl") || s.contains("breeze_wind");
+                || s.contains("hand") || s.contains("item") || s.contains("energy_swirl") || s.contains("breeze_wind");
     }
 
     /**
@@ -757,281 +758,39 @@ public final class SmoothBlocksShaderPatch {
     }
 
     private static String entityShaderHelpers() {
-        return """
-                /* SMOOTHBLOCKS_ENTITY_XBRZ_V8
-                 * Same validated Freescale p0+p1 math as the standalone lab. Entity
-                 * classification is evaluated inline because Minecraft's entity RenderPass
-                 * does not expose the terrain metadata atlas binding path; the resulting
-                 * corner states and reconstruction are mathematically identical.
-                 */
-                uniform int smoothblocks_EntityMode;
+        // One canonical p1 implementation for terrain, entities and world items.
+        // Only the uniform namespace differs; classification always runs at resource load.
+        String shared = terrainShaderHelpers()
+                .replace(TERRAIN_MARKER, ENTITY_MARKER)
+                .replace("smoothblocks_", "smoothblocks_Entity");
+        return shared + """
+                uniform int smoothblocks_EntityPreserveCoverage;
 
-                const float smoothblocks_E_SQRT_HALF = 0.7071067811865476;
-                const float smoothblocks_E_EQUAL = 30.0 / 255.0;
-                const float smoothblocks_E_STEEP = 2.2;
-                const float smoothblocks_E_DOMINANT = 3.6;
-
-                float smoothblocks_EDist(vec4 a, vec4 b) {
-                    const vec3 w = vec3(0.2627, 0.6780, 0.0593);
-                    const float scaleB = 0.5 / (1.0 - w.b);
-                    const float scaleR = 0.5 / (1.0 - w.r);
-                    vec3 diff = a.rgb - b.rgb;
-                    float y = dot(diff, w);
-                    float cb = scaleB * (diff.b - y);
-                    float cr = scaleR * (diff.r - y);
-                    float rgbDistance = sqrt(y * y + cb * cb + cr * cr);
-                    return min(a.a, b.a) * rgbDistance + abs(a.a - b.a);
-                }
-
-                bool smoothblocks_EEq(vec4 a, vec4 b) {
-                    if (a.a != b.a) return false;
-                    if (a.a == 0.0) return true;
-                    return all(equal(a.rgb * a.a, b.rgb * b.a));
-                }
-
-                bool smoothblocks_ESim(vec4 a, vec4 b) {
-                    return smoothblocks_EDist(a, b) < smoothblocks_E_EQUAL;
-                }
-
-                vec4 smoothblocks_EFetch(sampler2D source, ivec2 size, ivec2 center, ivec2 offset) {
-                    return texelFetch(source, clamp(center + offset, ivec2(0), size - ivec2(1)), 0);
-                }
-
-                int smoothblocks_ELineState(int blend, bool line, bool shallow, bool steep) {
-                    if (blend == 0) return 0;
-                    if (!line) return 1;
-                    return 2 + (shallow ? 1 : 0) + (steep ? 2 : 0);
-                }
-
-                ivec4 smoothblocks_EStates(sampler2D source, ivec2 size, ivec2 p) {
-                    vec4 m2m1 = smoothblocks_EFetch(source, size, p, ivec2(-2,-1));
-                    vec4 m20  = smoothblocks_EFetch(source, size, p, ivec2(-2, 0));
-                    vec4 m2p1 = smoothblocks_EFetch(source, size, p, ivec2(-2, 1));
-                    vec4 m1m2 = smoothblocks_EFetch(source, size, p, ivec2(-1,-2));
-                    vec4 A    = smoothblocks_EFetch(source, size, p, ivec2(-1,-1));
-                    vec4 D    = smoothblocks_EFetch(source, size, p, ivec2(-1, 0));
-                    vec4 G    = smoothblocks_EFetch(source, size, p, ivec2(-1, 1));
-                    vec4 m1p2 = smoothblocks_EFetch(source, size, p, ivec2(-1, 2));
-                    vec4 zm2  = smoothblocks_EFetch(source, size, p, ivec2( 0,-2));
-                    vec4 B    = smoothblocks_EFetch(source, size, p, ivec2( 0,-1));
-                    vec4 E    = smoothblocks_EFetch(source, size, p, ivec2( 0, 0));
-                    vec4 H    = smoothblocks_EFetch(source, size, p, ivec2( 0, 1));
-                    vec4 zp2  = smoothblocks_EFetch(source, size, p, ivec2( 0, 2));
-                    vec4 p1m2 = smoothblocks_EFetch(source, size, p, ivec2( 1,-2));
-                    vec4 C    = smoothblocks_EFetch(source, size, p, ivec2( 1,-1));
-                    vec4 F    = smoothblocks_EFetch(source, size, p, ivec2( 1, 0));
-                    vec4 I    = smoothblocks_EFetch(source, size, p, ivec2( 1, 1));
-                    vec4 p1p2 = smoothblocks_EFetch(source, size, p, ivec2( 1, 2));
-                    vec4 p2m1 = smoothblocks_EFetch(source, size, p, ivec2( 2,-1));
-                    vec4 p20  = smoothblocks_EFetch(source, size, p, ivec2( 2, 0));
-                    vec4 p2p1 = smoothblocks_EFetch(source, size, p, ivec2( 2, 1));
-
-                    int bTL = 0;
-                    int bTR = 0;
-                    int bBR = 0;
-                    int bBL = 0;
-
-                    if (!((smoothblocks_EEq(E,F) && smoothblocks_EEq(H,I)) || (smoothblocks_EEq(E,H) && smoothblocks_EEq(F,I)))) {
-                        float distHF = smoothblocks_EDist(G,E) + smoothblocks_EDist(E,C) + smoothblocks_EDist(zp2,I)
-                                + smoothblocks_EDist(I,p20) + 4.0 * smoothblocks_EDist(H,F);
-                        float distEI = smoothblocks_EDist(D,H) + smoothblocks_EDist(H,p1p2) + smoothblocks_EDist(B,F)
-                                + smoothblocks_EDist(F,p2p1) + 4.0 * smoothblocks_EDist(E,I);
-                        bool dominant = smoothblocks_E_DOMINANT * distHF < distEI;
-                        if (distHF < distEI && !smoothblocks_EEq(E,F) && !smoothblocks_EEq(E,H)) bBR = dominant ? 2 : 1;
+                vec4 smoothblocks_EntityReconstruct(sampler2D source, vec2 uv) {
+                    vec2 pixelSize = 1.0 / vec2(textureSize(source, 0));
+                    vec4 color = smoothblocks_EntityXbrzDirect(source, uv,
+                            smoothblocks_EntityLocalScale(pixelSize, dFdx(uv), dFdy(uv)));
+                    // Generated item side faces describe the original pixel silhouette.
+                    // Preserve that coverage rather than punching holes in the extrusion.
+                    if (smoothblocks_EntityPreserveCoverage != 0 && smoothblocks_EntityDebug == 0) {
+                        ivec2 size = textureSize(source, 0);
+                        ivec2 p = clamp(ivec2(floor(uv * vec2(size))), ivec2(0), size - 1);
+                        vec4 center = texelFetch(source, p, 0);
+                        if (color.a <= 1e-6) color.rgb = center.rgb;
+                        color.a = center.a;
                     }
-
-                    if (!((smoothblocks_EEq(D,E) && smoothblocks_EEq(G,H)) || (smoothblocks_EEq(D,G) && smoothblocks_EEq(E,H)))) {
-                        float distGE = smoothblocks_EDist(m2p1,D) + smoothblocks_EDist(D,B) + smoothblocks_EDist(m1p2,H)
-                                + smoothblocks_EDist(H,F) + 4.0 * smoothblocks_EDist(G,E);
-                        float distDH = smoothblocks_EDist(m20,G) + smoothblocks_EDist(G,zp2) + smoothblocks_EDist(A,E)
-                                + smoothblocks_EDist(E,I) + 4.0 * smoothblocks_EDist(D,H);
-                        bool dominant = smoothblocks_E_DOMINANT * distDH < distGE;
-                        if (distGE > distDH && !smoothblocks_EEq(E,D) && !smoothblocks_EEq(E,H)) bBL = dominant ? 2 : 1;
-                    }
-
-                    if (!((smoothblocks_EEq(B,C) && smoothblocks_EEq(E,F)) || (smoothblocks_EEq(B,E) && smoothblocks_EEq(C,F)))) {
-                        float distEC = smoothblocks_EDist(D,B) + smoothblocks_EDist(B,p1m2) + smoothblocks_EDist(H,F)
-                                + smoothblocks_EDist(F,p2m1) + 4.0 * smoothblocks_EDist(E,C);
-                        float distBF = smoothblocks_EDist(A,E) + smoothblocks_EDist(E,I) + smoothblocks_EDist(zm2,C)
-                                + smoothblocks_EDist(C,p20) + 4.0 * smoothblocks_EDist(B,F);
-                        bool dominant = smoothblocks_E_DOMINANT * distBF < distEC;
-                        if (distEC > distBF && !smoothblocks_EEq(E,B) && !smoothblocks_EEq(E,F)) bTR = dominant ? 2 : 1;
-                    }
-
-                    if (!((smoothblocks_EEq(A,B) && smoothblocks_EEq(D,E)) || (smoothblocks_EEq(A,D) && smoothblocks_EEq(B,E)))) {
-                        float distDB = smoothblocks_EDist(m20,A) + smoothblocks_EDist(A,zm2) + smoothblocks_EDist(G,E)
-                                + smoothblocks_EDist(E,C) + 4.0 * smoothblocks_EDist(D,B);
-                        float distAE = smoothblocks_EDist(m2m1,D) + smoothblocks_EDist(D,H) + smoothblocks_EDist(m1m2,B)
-                                + smoothblocks_EDist(B,F) + 4.0 * smoothblocks_EDist(A,E);
-                        bool dominant = smoothblocks_E_DOMINANT * distDB < distAE;
-                        if (distDB < distAE && !smoothblocks_EEq(E,D) && !smoothblocks_EEq(E,B)) bTL = dominant ? 2 : 1;
-                    }
-
-                    bool lineBR = bBR == 2 || (bBR == 1 && !((bTR != 0 && !smoothblocks_ESim(E,G))
-                            || (bBL != 0 && !smoothblocks_ESim(E,C))
-                            || (smoothblocks_ESim(G,H) && smoothblocks_ESim(H,I) && smoothblocks_ESim(I,F)
-                                && smoothblocks_ESim(F,C) && !smoothblocks_ESim(E,I))));
-                    float dFG = smoothblocks_EDist(F,G);
-                    float dHC = smoothblocks_EDist(H,C);
-                    bool shBR = lineBR && smoothblocks_E_STEEP * dFG <= dHC && !smoothblocks_EEq(E,G) && !smoothblocks_EEq(D,G);
-                    bool stBR = lineBR && smoothblocks_E_STEEP * dHC <= dFG && !smoothblocks_EEq(E,C) && !smoothblocks_EEq(B,C);
-                    int sBR = smoothblocks_ELineState(bBR, lineBR, shBR, stBR);
-
-                    bool lineBL = bBL == 2 || (bBL == 1 && !((bBR != 0 && !smoothblocks_ESim(E,A))
-                            || (bTL != 0 && !smoothblocks_ESim(E,I))
-                            || (smoothblocks_ESim(A,D) && smoothblocks_ESim(D,G) && smoothblocks_ESim(G,H)
-                                && smoothblocks_ESim(H,I) && !smoothblocks_ESim(E,G))));
-                    float dHA = smoothblocks_EDist(H,A);
-                    float dDI = smoothblocks_EDist(D,I);
-                    bool shBL = lineBL && smoothblocks_E_STEEP * dHA <= dDI && !smoothblocks_EEq(E,A) && !smoothblocks_EEq(B,A);
-                    bool stBL = lineBL && smoothblocks_E_STEEP * dDI <= dHA && !smoothblocks_EEq(E,I) && !smoothblocks_EEq(F,I);
-                    int sBL = smoothblocks_ELineState(bBL, lineBL, shBL, stBL);
-
-                    bool lineTR = bTR == 2 || (bTR == 1 && !((bTL != 0 && !smoothblocks_ESim(E,I))
-                            || (bBR != 0 && !smoothblocks_ESim(E,A))
-                            || (smoothblocks_ESim(I,F) && smoothblocks_ESim(F,C) && smoothblocks_ESim(C,B)
-                                && smoothblocks_ESim(B,A) && !smoothblocks_ESim(E,C))));
-                    float dBI = smoothblocks_EDist(B,I);
-                    float dFA = smoothblocks_EDist(F,A);
-                    bool shTR = lineTR && smoothblocks_E_STEEP * dBI <= dFA && !smoothblocks_EEq(E,I) && !smoothblocks_EEq(H,I);
-                    bool stTR = lineTR && smoothblocks_E_STEEP * dFA <= dBI && !smoothblocks_EEq(E,A) && !smoothblocks_EEq(D,A);
-                    int sTR = smoothblocks_ELineState(bTR, lineTR, shTR, stTR);
-
-                    bool lineTL = bTL == 2 || (bTL == 1 && !((bBL != 0 && !smoothblocks_ESim(E,C))
-                            || (bTR != 0 && !smoothblocks_ESim(E,G))
-                            || (smoothblocks_ESim(C,B) && smoothblocks_ESim(B,A) && smoothblocks_ESim(A,D)
-                                && smoothblocks_ESim(D,G) && !smoothblocks_ESim(E,A))));
-                    float dDC = smoothblocks_EDist(D,C);
-                    float dBG = smoothblocks_EDist(B,G);
-                    bool shTL = lineTL && smoothblocks_E_STEEP * dDC <= dBG && !smoothblocks_EEq(E,C) && !smoothblocks_EEq(F,C);
-                    bool stTL = lineTL && smoothblocks_E_STEEP * dBG <= dDC && !smoothblocks_EEq(E,G) && !smoothblocks_EEq(H,G);
-                    int sTL = smoothblocks_ELineState(bTL, lineTL, shTL, stTL);
-
-                    return ivec4(sTL, sTR, sBR, sBL);
-                }
-
-                float smoothblocks_ELeftRatio(vec2 center, vec2 origin, vec2 direction, vec2 scale) {
-                    vec2 p0 = center - origin;
-                    vec2 proj = direction * (dot(p0, direction) / dot(direction, direction));
-                    vec2 distv = p0 - proj;
-                    vec2 orth = vec2(-direction.y, direction.x);
-                    float side = sign(dot(p0, orth));
-                    float v = side * length(distv * scale);
-                    return smoothstep(-smoothblocks_E_SQRT_HALF, smoothblocks_E_SQRT_HALF, v);
-                }
-
-                vec2 smoothblocks_ELocalScale(vec2 pixelSize, vec2 du, vec2 dv) {
-                    vec2 texelScreenSize = sqrt(du * du + dv * dv);
-                    return pixelSize / max(texelScreenSize, vec2(1e-12));
-                }
-
-                bool smoothblocks_EShallow(int s) { return s == 3 || s == 5; }
-                bool smoothblocks_ESteep(int s) { return s == 4 || s == 5; }
-                bool smoothblocks_ELine(int s) { return s >= 2 && s <= 5; }
-
-                vec4 smoothblocks_ECloser(vec4 center, vec4 a, vec4 b) {
-                    return smoothblocks_EDist(center, b) <= smoothblocks_EDist(center, a) ? b : a;
-                }
-
-                void smoothblocks_EMixVisible(inout vec3 premul, inout float alpha, vec4 target, float t) {
-                    t = clamp(t, 0.0, 1.0);
-                    premul = mix(premul, target.rgb * target.a, t);
-                    alpha = mix(alpha, target.a, t);
-                }
-
-                vec4 smoothblocks_EntityXbrz(sampler2D source, vec2 uv) {
-                    ivec2 size = textureSize(source, 0);
-                    vec2 pixelSize = 1.0 / vec2(size);
-                    vec2 du = dFdx(uv);
-                    vec2 dv = dFdy(uv);
-                    vec2 scale = smoothblocks_ELocalScale(pixelSize, du, dv);
-
-                    vec2 tc = uv * vec2(size);
-                    ivec2 p = clamp(ivec2(floor(tc)), ivec2(0), size - ivec2(1));
-                    vec2 pos = fract(tc) - vec2(0.5);
-                    vec4 E = smoothblocks_EFetch(source, size, p, ivec2( 0, 0));
-                    vec4 B = smoothblocks_EFetch(source, size, p, ivec2( 0,-1));
-                    vec4 D = smoothblocks_EFetch(source, size, p, ivec2(-1, 0));
-                    vec4 F = smoothblocks_EFetch(source, size, p, ivec2( 1, 0));
-                    vec4 H = smoothblocks_EFetch(source, size, p, ivec2( 0, 1));
-                    ivec4 states = smoothblocks_EStates(source, size, p); // TL, TR, BR, BL
-                    vec3 resPremul = E.rgb * E.a;
-                    float resAlpha = E.a;
-
-                    int br = states.z;
-                    if (br > 0 && br <= 5) {
-                        vec2 origin = vec2(0.0, smoothblocks_E_SQRT_HALF);
-                        vec2 direction = vec2(1.0, -1.0);
-                        if (smoothblocks_ELine(br)) {
-                            bool shallow = smoothblocks_EShallow(br);
-                            bool steep = smoothblocks_ESteep(br);
-                            origin = shallow ? vec2(0.0, 0.25) : vec2(0.0, 0.5);
-                            direction.x += shallow ? 1.0 : 0.0;
-                            direction.y -= steep ? 1.0 : 0.0;
-                        }
-                        smoothblocks_EMixVisible(resPremul, resAlpha, smoothblocks_ECloser(E, H, F),
-                                smoothblocks_ELeftRatio(pos, origin, direction, scale));
-                    }
-
-                    int bl = states.w;
-                    if (bl > 0 && bl <= 5) {
-                        vec2 origin = vec2(-smoothblocks_E_SQRT_HALF, 0.0);
-                        vec2 direction = vec2(1.0, 1.0);
-                        if (smoothblocks_ELine(bl)) {
-                            bool shallow = smoothblocks_EShallow(bl);
-                            bool steep = smoothblocks_ESteep(bl);
-                            origin = shallow ? vec2(-0.25, 0.0) : vec2(-0.5, 0.0);
-                            direction.y += shallow ? 1.0 : 0.0;
-                            direction.x += steep ? 1.0 : 0.0;
-                        }
-                        smoothblocks_EMixVisible(resPremul, resAlpha, smoothblocks_ECloser(E, H, D),
-                                smoothblocks_ELeftRatio(pos, origin, direction, scale));
-                    }
-
-                    int tr = states.y;
-                    if (tr > 0 && tr <= 5) {
-                        vec2 origin = vec2(smoothblocks_E_SQRT_HALF, 0.0);
-                        vec2 direction = vec2(-1.0, -1.0);
-                        if (smoothblocks_ELine(tr)) {
-                            bool shallow = smoothblocks_EShallow(tr);
-                            bool steep = smoothblocks_ESteep(tr);
-                            origin = shallow ? vec2(0.25, 0.0) : vec2(0.5, 0.0);
-                            direction.y -= shallow ? 1.0 : 0.0;
-                            direction.x -= steep ? 1.0 : 0.0;
-                        }
-                        smoothblocks_EMixVisible(resPremul, resAlpha, smoothblocks_ECloser(E, F, B),
-                                smoothblocks_ELeftRatio(pos, origin, direction, scale));
-                    }
-
-                    int tl = states.x;
-                    if (tl > 0 && tl <= 5) {
-                        vec2 origin = vec2(0.0, -smoothblocks_E_SQRT_HALF);
-                        vec2 direction = vec2(-1.0, 1.0);
-                        if (smoothblocks_ELine(tl)) {
-                            bool shallow = smoothblocks_EShallow(tl);
-                            bool steep = smoothblocks_ESteep(tl);
-                            origin = shallow ? vec2(0.0, -0.25) : vec2(0.0, -0.5);
-                            direction.x -= shallow ? 1.0 : 0.0;
-                            direction.y += steep ? 1.0 : 0.0;
-                        }
-                        smoothblocks_EMixVisible(resPremul, resAlpha, smoothblocks_ECloser(E, D, B),
-                                smoothblocks_ELeftRatio(pos, origin, direction, scale));
-                    }
-
-                    vec3 outRgb = resAlpha > 1e-6 ? resPremul / resAlpha : E.rgb;
-                    return vec4(clamp(outRgb, 0.0, 1.0), clamp(resAlpha, 0.0, 1.0));
+                    return color;
                 }
 
                 vec4 smoothblocks_EntitySample(sampler2D source, vec2 uv) {
-                    if (smoothblocks_EntityMode == 2) return smoothblocks_EntityXbrz(source, uv);
-                    return textureGrad(source, uv, dFdx(uv), dFdy(uv));
+                    if (smoothblocks_EntityMode == 2) return smoothblocks_EntityReconstruct(source, uv);
+                    return texture(source, uv);
                 }
 
                 vec4 smoothblocks_EntitySample(sampler2D source, vec2 uv, float bias) {
-                    if (smoothblocks_EntityMode == 2) return smoothblocks_EntityXbrz(source, uv);
+                    if (smoothblocks_EntityMode == 2) return smoothblocks_EntityReconstruct(source, uv);
                     return texture(source, uv, bias);
                 }
                 """;
     }
-
 }

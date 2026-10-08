@@ -85,7 +85,7 @@ public final class SmoothBlocksXbrzMetadata {
 
         final AtlasSnapshot snapshot;
         try {
-            snapshot = captureLevel0(atlas);
+            snapshot = captureLevel0(atlas.getTexture());
         } catch (Throwable t) {
             System.err.println("[SmoothBlocks] xBRZ GPU atlas readback failed; metadata disabled: " + t);
             close();
@@ -228,11 +228,8 @@ public final class SmoothBlocksXbrzMetadata {
         }
     }
 
-    private static AtlasSnapshot captureLevel0(TextureAtlas atlas) {
+    static AtlasSnapshot captureLevel0(GpuTexture texture) {
         RenderSystem.assertOnRenderThread();
-        if (atlas == null) throw new IllegalArgumentException("atlas is null");
-
-        GpuTexture texture = atlas.getTexture();
         if (!(texture instanceof GlTexture glTexture) || texture.isClosed()) {
             throw new IllegalStateException("block atlas is not a live OpenGL texture");
         }
@@ -277,7 +274,7 @@ public final class SmoothBlocksXbrzMetadata {
             for (int i = 0; i < rgbaNative.length; i++) rgbaNative[i] = Integer.reverseBytes(rgbaNative[i]);
         }
 
-        int[] argb = new int[rgbaNative.length];
+        int[] argb = rgbaNative;
         for (int i = 0; i < rgbaNative.length; i++) {
             // glGetTextureImage(GL_RGBA, GL_UNSIGNED_BYTE) -> native little-endian
             // int 0xAABBGGRR. Convert explicitly to Java ARGB 0xAARRGGBB.
@@ -318,6 +315,14 @@ public final class SmoothBlocksXbrzMetadata {
             textureId = 0;
         }
 
+        int tex = uploadMetadata(width, height, data);
+        long mismatches = verifyUpload(tex, data);
+        textureId = tex;
+        return mismatches;
+    }
+
+    /** Shared upload with explicit pixel-store preservation; caller owns the GL texture. */
+    static int uploadMetadata(int width, int height, ByteBuffer data) {
         int tex = GlStateManager._genTexture();
         final int scratchUnit = 11;
         int previousActive = GL11C.glGetInteger(GL13C.GL_ACTIVE_TEXTURE);
@@ -360,11 +365,7 @@ public final class SmoothBlocksXbrzMetadata {
             }
         }
 
-        // One-time byte-for-byte GPU readback. This turns "maybe the metadata upload got
-        // scrambled" into a hard invariant visible in F7 (up=0 is required).
-        long mismatches = verifyUpload(tex, data);
-        textureId = tex;
-        return mismatches;
+        return tex;
     }
 
     private static long verifyUpload(int tex, ByteBuffer expected) {
@@ -457,5 +458,5 @@ public final class SmoothBlocksXbrzMetadata {
                 + " buildMs=" + String.format(java.util.Locale.ROOT, "%.2f", buildNanos / 1_000_000.0);
     }
 
-    private record AtlasSnapshot(int width, int height, int[] argb, int textureId) {}
+    record AtlasSnapshot(int width, int height, int[] argb, int textureId) {}
 }

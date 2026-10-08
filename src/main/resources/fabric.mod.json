@@ -3,7 +3,7 @@
   "id": "smoothblocks",
   "version": "${version}",
   "name": "Smooth Blocks",
-  "description": "Direct-to-target xBRZ terrain reconstruction for Sodium/Iris plus shader-based entity xBRZ; GUI/font/weather untouched.",
+  "description": "Two-stage xBRZ reconstruction for world terrain, entities and items, with optional Iris shaders. GUI rendering remains unchanged.",
   "environment": "client",
   "entrypoints": {
     "client": [
@@ -22,7 +22,7 @@
   ],
   "depends": {
     "fabricloader": ">=0.19.5",
-    "minecraft": "~26.1",
+    "minecraft": "26.1.2",
     "java": ">=25",
     "sodium": ">=0.9.1"
   }

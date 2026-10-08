@@ -34,7 +34,8 @@ public abstract class RenderPassMixin {
     }
 
     @ModifyVariable(method = "bindTexture", at = @At("HEAD"), argsOnly = true)
-    private GpuSampler smoothblocks$replaceEntitySampler(GpuSampler original) {
-        return SmoothBlocksClient.chooseWorldEntitySampler(this.smoothblocks$currentPipeline, original);
+    private GpuSampler smoothblocks$replaceEntitySampler(GpuSampler original, String name,
+                                                         GpuTextureView view, GpuSampler sampler) {
+        return SmoothBlocksClient.chooseWorldEntitySampler(this.smoothblocks$currentPipeline, name, original);
     }
 }

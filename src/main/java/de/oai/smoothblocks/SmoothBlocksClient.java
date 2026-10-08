@@ -10,6 +10,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
 import java.util.Locale;
+import java.util.Map;
+import java.util.IdentityHashMap;
+import java.util.HashMap;
+import java.util.OptionalDouble;
+import com.mojang.blaze3d.textures.AddressMode;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Client state, mode switching and diagnostics. */
@@ -40,6 +45,26 @@ public final class SmoothBlocksClient {
 
     private static volatile GpuSampler linearSampler;
     private static volatile GpuSampler nearestSampler;
+    private record SamplerKey(AddressMode u, AddressMode v, FilterMode filter, int anisotropy, OptionalDouble lod) {}
+    private static final Map<SamplerKey, GpuSampler> ENTITY_SAMPLERS = new HashMap<>();
+    private static final Map<GpuSampler, String> FILTER_DESCRIPTIONS = new IdentityHashMap<>();
+    private static final Map<RenderPipeline, String> PIPELINE_NAMES = new IdentityHashMap<>();
+
+    public static void closeCaches() {
+        for (GpuSampler sampler : ENTITY_SAMPLERS.values()) sampler.close();
+        ENTITY_SAMPLERS.clear();
+        FILTER_DESCRIPTIONS.clear();
+        PIPELINE_NAMES.clear();
+        CATEGORIES.clear();
+    }
+
+    private static GpuSampler filteredSampler(GpuSampler original, FilterMode filter) {
+        if (original.getMinFilter() == filter && original.getMagFilter() == filter) return original;
+        SamplerKey key = new SamplerKey(original.getAddressModeU(), original.getAddressModeV(), filter,
+                original.getMaxAnisotropy(), original.getMaxLod());
+        return ENTITY_SAMPLERS.computeIfAbsent(key, k -> RenderSystem.getDevice().createSampler(
+                k.u, k.v, k.filter, k.filter, k.anisotropy, k.lod));
+    }
 
     private static volatile String lastPipeline = "none";
     private static volatile String lastTextureName = "none";
@@ -140,7 +165,8 @@ public final class SmoothBlocksClient {
     }
 
     /** Entity XBRZ reconstructs with texelFetch; keep a NEAREST backing sampler so an unpatched texture() call cannot silently introduce linear filtering. */
-    public static GpuSampler chooseWorldEntitySampler(RenderPipeline pipeline, GpuSampler original) {
+    public static GpuSampler chooseWorldEntitySampler(RenderPipeline pipeline, String name, GpuSampler original) {
+        if (!SmoothBlocksRenderScope.isWorld() || !"Sampler0".equals(name)) return original;
         Category category = category(pipeline);
         if (!enabled || (category != Category.WORLD_ENTITY && category != Category.PARTICLE)) {
             return original;
@@ -149,9 +175,9 @@ public final class SmoothBlocksClient {
         GpuSampler replacement;
         if (category == Category.PARTICLE && selectedMode == SamplingMode.XBRZ) {
             // Particles are not part of the xBRZ guarantee; preserve the known-good smooth path.
-            replacement = linear();
+            replacement = filteredSampler(original, FilterMode.LINEAR);
         } else {
-            replacement = getTerrainSamplerFilter() == FilterMode.NEAREST ? nearest() : linear();
+            replacement = filteredSampler(original, getTerrainSamplerFilter());
         }
         if (replacement != null && replacement != original) {
             SELECTED_FORCED_CALLS.incrementAndGet();
@@ -321,7 +347,17 @@ public final class SmoothBlocksClient {
         OTHER
     }
 
+    private static final Map<RenderPipeline, Category> CATEGORIES = new IdentityHashMap<>();
+
+    public static boolean isWorldEntityPipeline(RenderPipeline pipeline) {
+        return category(pipeline) == Category.WORLD_ENTITY;
+    }
+
     private static Category category(RenderPipeline pipeline) {
+        return CATEGORIES.computeIfAbsent(pipeline, SmoothBlocksClient::classifyPipeline);
+    }
+
+    private static Category classifyPipeline(RenderPipeline pipeline) {
         String s = pipelineName(pipeline);
         if (s.contains("particle")) return Category.PARTICLE;
         if (s.contains("weather")) return Category.WEATHER;
@@ -333,7 +369,7 @@ public final class SmoothBlocksClient {
                 || s.contains("tripwire_block") || s.contains("translucent_moving_block")) {
             return Category.TERRAIN;
         }
-        if (s.contains("entity") || s.contains("armor") || s.contains("eyes")
+        if (s.contains("entity") || s.contains("item") || s.contains("armor") || s.contains("eyes")
                 || s.contains("energy_swirl") || s.contains("breeze_wind") || s.contains("moving_block")) {
             return Category.WORLD_ENTITY;
         }
@@ -342,18 +378,13 @@ public final class SmoothBlocksClient {
 
     private static String pipelineName(RenderPipeline pipeline) {
         if (pipeline == null) return "none";
-        try {
-            return String.valueOf(pipeline.getLocation());
-        } catch (Throwable ignored) {
-            return pipeline.toString();
-        }
+        return PIPELINE_NAMES.computeIfAbsent(pipeline, p -> String.valueOf(p.getLocation()));
     }
 
     private static String filterDescription(GpuSampler sampler) {
         if (sampler == null) return "null";
-        return sampler.getMinFilter() + "/" + sampler.getMagFilter()
-                + " aniso=" + sampler.getMaxAnisotropy()
-                + " lod=" + sampler.getMaxLod();
+        return FILTER_DESCRIPTIONS.computeIfAbsent(sampler, s -> s.getMinFilter() + "/" + s.getMagFilter()
+                + " aniso=" + s.getMaxAnisotropy() + " lod=" + s.getMaxLod());
     }
 
     public static void noteEntityAlphaEdgeRepair(int repairedPixels, String resourceId) {
@@ -448,7 +479,7 @@ public final class SmoothBlocksClient {
                 "mode=%s dbg=%s T%d/%d E%d/%d\n" +
                 "pass x%d fb%d p/m/u=%d/%d/%d %s %s\n" +
                 "meta %s d%.2f e%.1f uv%d ov%d up%d a%d\n" +
-                "iris %s ent=%d/%d",
+                "iris %s ent=%d/%d %s",
                 enabled ? selectedMode : "OFF", debugView,
                 DEFAULT_TERRAIN_SHADER_PATCHES.get(), IRIS_TERRAIN_SHADER_PATCHES.get(),
                 DEFAULT_ENTITY_SHADER_PATCHES.get(), IRIS_ENTITY_SHADER_PATCHES.get(),
@@ -460,7 +491,7 @@ public final class SmoothBlocksClient {
                 SmoothBlocksXbrzMetadata.overlappingTexels(), SmoothBlocksXbrzMetadata.uploadMismatchedBytes(),
                 SmoothBlocksXbrzMetadata.animatedSprites(),
                 SmoothBlocksShaderPatch.terrainStatsString(),
-                ENTITY_XBRZ_ACTIVE_SETUPS.get(), ENTITY_XBRZ_PROGRAM_SETUPS.get());
+                ENTITY_XBRZ_ACTIVE_SETUPS.get(), ENTITY_XBRZ_PROGRAM_SETUPS.get(), SmoothBlocksTextureMetadata.stats());
     }
 
     private static String modVersion(String id) {

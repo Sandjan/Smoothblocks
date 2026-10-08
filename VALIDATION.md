@@ -1,4 +1,21 @@
-# SmoothBlocks 1.6.3 validation
+# SmoothBlocks validation
+
+## 1.0.0-alpha.2 — 2026-10-07
+
+Run `gradlew.bat build mixinRegression gpuRegression` with Java 25 (GPU task needs a local OpenGL 4.5 driver). Validated locally with Gradle 9.8.0, Fabric Loader 0.19.5 and Intel UHD Graphics.
+
+- Existing shader patch harness and 727,506 atlas checks pass.
+- Real Minecraft 26.1.2 entity/item fragment resources are selected and patched idempotently. GUI/text shaders are excluded.
+- Target descriptors are checked against the Minecraft JAR. A separate Fabric launch transforms all vanilla target classes with Mixin verification enabled, then exits before game startup. It uses a test-only Sodium dependency alias, not the actual Sodium/Iris implementations.
+- Offscreen GLSL compilation/linking and RGBA pixel readback pass. The shared p1 kernel gives identical terrain/entity outputs; vanilla and two-phase Iris patch fixtures match.
+- The actual entity bridge switches the same program/texture between world xBRZ and GUI-original output. GUI output is byte-identical to the original shader; GUI and auxiliary samplers are not replaced.
+- Item alpha matches original coverage; adjacent atlas sprite colors do not leak across borders.
+- Metadata lookups/unchanged frames do not build. Dirty textures are unavailable until refreshed, repeated invalidations coalesce, identical uploads skip classification, changed uploads rebuild once, disposal removes metadata.
+- Shared GL binding restores the previous texture, sampler and active unit.
+
+Limits: no in-game world or actual shaderpack was rendered in these tests, no FPS benchmark, no visual acceptance of held item side faces. See RELEASE-CHECKLIST.md. The initial review remains a historical snapshot of alpha.1.
+
+## Historical internal 1.6.3 validation
 
 No Java/Gradle installation was attempted in the build environment. Dependency-free core and shader-patcher checks were compiled with the already available JDK.
 

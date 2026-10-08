@@ -43,6 +43,63 @@ java {
     withSourcesJar()
 }
 
+// Dependency-free harnesses plus real Minecraft shader/bytecode regression checks.
+sourceSets {
+    validation {
+        java.srcDir 'validation'
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+
+def validationMains = [
+    patchRegression: 'PatchHarness',
+    atlasRegression: 'de.oai.smoothblocks.AtlasMappingHarness',
+    integrationRegression: 'de.oai.smoothblocks.RegressionHarness'
+]
+validationMains.each { taskName, entry ->
+    tasks.register(taskName, JavaExec) {
+        dependsOn tasks.named('validationClasses')
+        classpath = sourceSets.validation.runtimeClasspath
+        mainClass = entry
+    }
+}
+tasks.named('check') { dependsOn validationMains.keySet() }
+
+// Explicit opt-in: requires a local OpenGL driver and creates only a hidden GLFW window.
+tasks.register('gpuRegression', JavaExec) {
+    dependsOn tasks.named('validationClasses')
+    classpath = sourceSets.validation.runtimeClasspath
+    mainClass = 'de.oai.smoothblocks.GpuRegressionHarness'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// Isolated Fabric transform smoke test. The test-only dependency alias lets us
+// validate vanilla hooks without installing Sodium or launching a game window.
+tasks.register('mixinSmokeJar', Jar) {
+    dependsOn tasks.named('validationClasses')
+    archiveClassifier = 'mixin-smoke-test'
+    destinationDirectory = layout.buildDirectory.dir('validation')
+    from(sourceSets.validation.output)
+    from('validation/mixin-smoke')
+}
+tasks.register('mixinRegression', JavaExec) {
+    dependsOn tasks.named('mixinSmokeJar'), tasks.named('jar')
+    classpath = sourceSets.validation.runtimeClasspath
+    mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+    systemProperty 'fabric.development', 'true'
+    systemProperty 'fabric.disableErrorGui', 'true'
+    systemProperty 'fabric.addMods', tasks.named('mixinSmokeJar').get().archiveFile.get().asFile.absolutePath
+    systemProperty 'mixin.debug.verify', 'true'
+    systemProperty 'mixin.debug.countInjections', 'true'
+    args '--gameDir', layout.buildDirectory.dir('mixin-smoke-run').get().asFile.absolutePath,
+            '--version', 'SmoothBlocks-validation'
+    doFirst {
+        layout.buildDirectory.dir('mixin-smoke-run').get().asFile.mkdirs()
+        layout.buildDirectory.dir('resources/validation').get().asFile.mkdirs()
+    }
+}
+
 jar {
     inputs.property "projectName", project.name
     from("LICENSE") {
