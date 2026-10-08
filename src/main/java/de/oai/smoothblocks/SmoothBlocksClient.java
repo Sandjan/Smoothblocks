@@ -6,8 +6,8 @@ import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.Minecraft;
-import net.minecraft.network.chat.Component;
+
+
 
 import java.util.Locale;
 import java.util.Map;
@@ -17,30 +17,15 @@ import java.util.OptionalDouble;
 import com.mojang.blaze3d.textures.AddressMode;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Client state, mode switching and diagnostics. */
+/** Fixed xBRZ rendering policy, sampler caches and internal diagnostics. */
 public final class SmoothBlocksClient {
     private SmoothBlocksClient() {}
-
-    public enum SamplingMode {
-        NEAREST,
-        LINEAR,
-        XBRZ
-    }
-
-    /** F6 diagnostic view. OFF never changes rendered colors. */
-    public enum DebugView {
-        OFF,
-        PATH,
-        EDGES
-    }
 
     public static final int SHADER_MODE_NEAREST = 0;
     public static final int SHADER_MODE_LINEAR = 1;
     public static final int SHADER_MODE_XBRZ = 2;
 
-    private static volatile boolean enabled = true;
-    private static volatile SamplingMode selectedMode = SamplingMode.XBRZ;
-    private static volatile DebugView debugView = DebugView.OFF;
+    private static final boolean enabled = true;
     private static volatile boolean verbose = false;
 
     private static volatile GpuSampler linearSampler;
@@ -173,7 +158,7 @@ public final class SmoothBlocksClient {
         }
 
         GpuSampler replacement;
-        if (category == Category.PARTICLE && selectedMode == SamplingMode.XBRZ) {
+        if (category == Category.PARTICLE) {
             // Particles are not part of the xBRZ guarantee; preserve the known-good smooth path.
             replacement = filteredSampler(original, FilterMode.LINEAR);
         } else {
@@ -194,9 +179,6 @@ public final class SmoothBlocksClient {
         return enabled;
     }
 
-    public static SamplingMode getSelectedMode() {
-        return selectedMode;
-    }
 
     /**
      * XBRZ uses texelFetch and therefore does not need hardware filtering. Keep its
@@ -205,7 +187,7 @@ public final class SmoothBlocksClient {
      * bilinear-filtered explicitly in the injected shader, independent of sampler state.
      */
     public static FilterMode getTerrainSamplerFilter() {
-        return selectedMode == SamplingMode.LINEAR ? FilterMode.LINEAR : FilterMode.NEAREST;
+        return FilterMode.NEAREST;
     }
 
     /** Compatibility name used by the Iris sampler mixin. */
@@ -214,26 +196,13 @@ public final class SmoothBlocksClient {
     }
 
     public static int getShaderModeCode() {
-        if (!enabled) return SHADER_MODE_NEAREST;
-        return switch (selectedMode) {
-            case NEAREST -> SHADER_MODE_NEAREST;
-            case LINEAR -> SHADER_MODE_LINEAR;
-            case XBRZ -> SHADER_MODE_XBRZ;
-        };
+        return SHADER_MODE_XBRZ;
     }
 
     public static int getDebugViewCode() {
-        if (!enabled || selectedMode != SamplingMode.XBRZ) return 0;
-        return switch (debugView) {
-            case OFF -> 0;
-            case PATH -> 1;
-            case EDGES -> 2;
-        };
+        return 0;
     }
 
-    public static DebugView getDebugView() {
-        return debugView;
-    }
 
     public static void noteIrisSodiumTerrainApplied(GpuSampler sampler) {
         lastSodiumAppliedFilter = filterDescription(sampler);
@@ -284,7 +253,7 @@ public final class SmoothBlocksClient {
         } else if (!enabled) {
             lastEntityXbrzStatus = "off";
         } else {
-            lastEntityXbrzStatus = selectedMode.name().toLowerCase(Locale.ROOT);
+            lastEntityXbrzStatus = "inactive";
         }
     }
 
@@ -396,104 +365,6 @@ public final class SmoothBlocksClient {
         }
     }
 
-    public static void toggleEnabled(Minecraft minecraft) {
-        enabled = !enabled;
-        minecraft.gui.setOverlayMessage(Component.literal(
-                "SmoothBlocks: " + (enabled ? selectedMode + "/ON" : "ORIGINAL/OFF")), true);
-    }
-
-    public static void toggleFilter(Minecraft minecraft) {
-        selectedMode = switch (selectedMode) {
-            case NEAREST -> SamplingMode.LINEAR;
-            case LINEAR -> SamplingMode.XBRZ;
-            case XBRZ -> SamplingMode.NEAREST;
-        };
-        minecraft.gui.setOverlayMessage(Component.literal(
-                "SmoothBlocks: " + selectedMode), true);
-    }
-
-    /**
-     * Compact visual diagnosis instead of console spam. PATH proves which metadata branch
-     * a fragment hits; EDGES visualises the actual packed xBRZ edge states.
-     */
-    public static void toggleDebugView(Minecraft minecraft) {
-        debugView = switch (debugView) {
-            case OFF -> DebugView.PATH;
-            case PATH -> DebugView.EDGES;
-            case EDGES -> DebugView.OFF;
-        };
-        minecraft.gui.setOverlayMessage(Component.literal(
-                "SmoothBlocks debug view: " + debugView), true);
-    }
-
-    public static void showDebugReport(Minecraft minecraft) {
-        for (String line : debugText().split("\\n")) {
-            minecraft.gui.getChat().addClientSystemMessage(Component.literal("[SmoothBlocks] " + line));
-        }
-    }
-
-    public static void reset(Minecraft minecraft) {
-        PIPELINE_CALLS.set(0);
-        BIND_CALLS.set(0);
-        SELECTED_BIND_CALLS.set(0);
-        SELECTED_FORCED_CALLS.set(0);
-        SODIUM_TERRAIN_CALLS.set(0);
-        SODIUM_TERRAIN_FORCED.set(0);
-        IRIS_SODIUM_TERRAIN_CALLS.set(0);
-        // Shader patch counters are compile/reload-time evidence, not per-frame activity.
-        // Keep them across F9; otherwise a reset after entering the world would falsely
-        // report d/i=0/0 until the next resource or shader reload.
-        ENTITY_XBRZ_PROGRAM_SETUPS.set(0);
-        ENTITY_XBRZ_ACTIVE_SETUPS.set(0);
-        PARTICLE_BIND_CALLS.set(0);
-        PARTICLE_FORCED_CALLS.set(0);
-        EXCLUDED_WEATHER_CALLS.set(0);
-        EXCLUDED_GUI_CALLS.set(0);
-        ENTITY_ALPHA_REPAIR_TEXTURES.set(0);
-        ENTITY_ALPHA_REPAIR_PIXELS.set(0);
-        EXCLUDED_OTHER_CALLS.set(0);
-        XBRZ_METADATA_BUILDS.set(0);
-        XBRZ_PROGRAM_BINDS.set(0);
-        XBRZ_ACTIVE_BINDS.set(0);
-        XBRZ_FALLBACK_BINDS.set(0);
-        XBRZ_FALLBACK_PATCH.set(0);
-        XBRZ_FALLBACK_META.set(0);
-        XBRZ_FALLBACK_UNIT.set(0);
-        SmoothBlocksXbrzGpuBridge.resetDiagnostics();
-        lastPipeline = "none";
-        lastTextureName = "none";
-        lastTextureLabel = "none";
-        lastOriginalFilter = "none";
-        lastAppliedFilter = "none";
-        lastSodiumOriginalFilter = "none";
-        lastSodiumAppliedFilter = "none";
-        lastXbrzTextureUnit = -1;
-        lastXbrzBindStatus = "none";
-        lastEntityXbrzStatus = "none";
-        minecraft.gui.setOverlayMessage(Component.literal("SmoothBlocks diagnostics reset"), true);
-    }
-
-    public static String debugText() {
-        String bind = lastXbrzTextureUnit >= 0 ? "u" + lastXbrzTextureUnit : lastXbrzBindStatus;
-        return String.format(Locale.ROOT,
-                "mode=%s dbg=%s T%d/%d E%d/%d\n" +
-                "pass x%d fb%d p/m/u=%d/%d/%d %s %s\n" +
-                "meta %s d%.2f e%.1f uv%d ov%d up%d a%d\n" +
-                "iris %s ent=%d/%d %s",
-                enabled ? selectedMode : "OFF", debugView,
-                DEFAULT_TERRAIN_SHADER_PATCHES.get(), IRIS_TERRAIN_SHADER_PATCHES.get(),
-                DEFAULT_ENTITY_SHADER_PATCHES.get(), IRIS_ENTITY_SHADER_PATCHES.get(),
-                XBRZ_ACTIVE_BINDS.get(), XBRZ_FALLBACK_BINDS.get(),
-                XBRZ_FALLBACK_PATCH.get(), XBRZ_FALLBACK_META.get(), XBRZ_FALLBACK_UNIT.get(),
-                bind, SmoothBlocksXbrzGpuBridge.bindingStatsString(),
-                SmoothBlocksXbrzMetadata.sourceMode(), SmoothBlocksXbrzMetadata.sourceMismatchPercent(),
-                SmoothBlocksXbrzMetadata.edgePercent(), SmoothBlocksXbrzMetadata.uvMismatchSprites(),
-                SmoothBlocksXbrzMetadata.overlappingTexels(), SmoothBlocksXbrzMetadata.uploadMismatchedBytes(),
-                SmoothBlocksXbrzMetadata.animatedSprites(),
-                SmoothBlocksShaderPatch.terrainStatsString(),
-                ENTITY_XBRZ_ACTIVE_SETUPS.get(), ENTITY_XBRZ_PROGRAM_SETUPS.get(), SmoothBlocksTextureMetadata.stats());
-    }
-
     private static String modVersion(String id) {
         return FabricLoader.getInstance().getModContainer(id)
                 .map(c -> c.getMetadata().getVersion().getFriendlyString())
@@ -503,6 +374,5 @@ public final class SmoothBlocksClient {
     private static void logEnvironment() {
         System.out.println("[SmoothBlocks] Loaded. Minecraft=" + modVersion("minecraft")
                 + ", Iris=" + modVersion("iris") + ", Sodium=" + modVersion("sodium"));
-        System.out.println("[SmoothBlocks] P=NEAREST/LINEAR/XBRZ | F6=PATH/EDGES/OFF | F7=compact debug | F8=ON/OFF | F9=reset");
     }
 }

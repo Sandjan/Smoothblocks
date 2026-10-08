@@ -3,6 +3,7 @@
 build/
 out/
 run/
+config/
 logs/
 crash-reports/
 

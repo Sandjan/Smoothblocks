@@ -1,1 +1,0 @@
-PASS pass0 parity images=500 texels=158910 mismatches=0

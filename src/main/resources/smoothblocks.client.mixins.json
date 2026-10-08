@@ -8,7 +8,6 @@
     "SodiumShaderLoaderMixin",
     "IrisSodiumShaderMixin",
     "IrisTransformPatcherMixin",
-    "KeyboardHandlerMixin",
     "ReloadableTextureMixin",
     "TextureAtlasMixin",
     "SpriteAnimationStateMixin",

@@ -1,63 +1,49 @@
-# SmoothBlocks 1.0.0-alpha.8
+# SmoothBlocks
 
-Development alpha for Minecraft 26.1.2. Fabric and Sodium are required; Iris is optional. This is not the stable 1.0 release.
+SmoothBlocks gives Minecraft's pixel textures a smoother, stylized look using two-stage xBRZ reconstruction. Version **1.0.0** targets **Minecraft 26.1.2 on Fabric**.
 
-Alpha.2 addresses the shader-loading gap and item-atlas boundaries identified in the initial review. In-game acceptance is still pending; see [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md), [VALIDATION.md](VALIDATION.md) and [CHANGELOG.md](CHANGELOG.md).
+![SmoothBlocks world rendering with shaders](examples/image1.png)
 
-Only world rendering is filtered: terrain, entities and world/held items. GUI, text, inventory/hotbar items and GUI entity previews retain their original rendering, even when they share a shader or texture with world objects.
+## Requirements and installation
 
-In XBRZ mode, generated 2D world items omit their artificial side walls; their front/back alpha stays smooth. These items have open sides and may disappear edge-on. GUI, true 3D models and other sampling modes keep their original geometry.
+- Minecraft **26.1.2** and Java **25**.
+- Fabric Loader **0.19.5 or newer**.
+- Sodium **0.9.1 or newer**, built for Minecraft 26.1.2.
+- Iris is optional. Use a version compatible with your Minecraft and Sodium versions to enable shaderpacks.
 
-Entities now use resource-time metadata and the same reconstruction kernel as terrain. Texture changes invalidate the cached metadata; unchanged draws never classify edges. World items use the same interpolated RGBA as terrain cutouts, including alpha at their edges. Mip-level 0 and the animated-atlas fallback are unchanged.
+Place `smoothblocks-1.0.0.jar` in your Minecraft instance's `mods` folder alongside the required mods, then start the Fabric profile. SmoothBlocks runs automatically and registers **no keyboard shortcuts**. Fabric API does not need to be installed separately for SmoothBlocks.
 
-Target: Minecraft 26.1.2, Fabric Loader 0.19.5, Sodium/Iris, Java 25.
+## What changes
 
-The standalone Java lab remains the source of truth for opaque Freescale xBRZ. v1.6.3 keeps the opaque pass-0 metadata **bit-identical** to v1.6.2/the validated lab and fixes two Minecraft-only gaps that were still visible after the atlas-association repair.
+- World terrain, entities, armor and held/dropped items use xBRZ reconstruction, including texture alpha edges.
+- Opaque block textures wrap within their own sprite, smoothing transitions between aligned repetitions of the same texture. This does not blend different block materials or change block geometry.
+- Animated block frames and their temporal intermediate steps use precomputed metadata. Duplicate metadata shares storage; animation switches update only a four-byte address.
+- Water, lava, nether portal and fire effects retain linear filtering.
+- GUI text, menus, inventory/hotbar items and GUI entity previews retain their original rendering.
+- Generated flat items omit their artificial pixel side walls in world rendering. Their smooth front/back remain visible; they can appear very thin or disappear when viewed exactly edge-on. Actual 3D item models retain their geometry.
 
-## Controls
+![SmoothBlocks block textures and held item](examples/image2.png)
 
-- **P**: NEAREST -> LINEAR -> XBRZ (XBRZ is default)
-- **F6**: OFF -> PATH -> EDGES -> OFF
-- **F7**: compact four-line diagnostics
-- **F8**: enable/disable SmoothBlocks
-- **F9**: reset runtime counters
+Screenshots may include other mods and shader effects; those are not bundled with SmoothBlocks.
 
-## Inherited algorithm (internal v1.6.3 baseline)
+## Compatibility and performance
 
-1. **Alpha is now part of xBRZ edge classification.** The distance follows the established xBRZ alpha construction: the lower alpha weights the YCbCr RGB distance and the alpha difference is added directly. Two opaque pixels therefore use exactly the old validated RGB distance; two fully transparent pixels compare equal regardless of hidden RGB.
-2. **Pass 1 reconstructs RGBA, not RGB-only.** xBRZ blends premultiplied RGB + alpha and converts back to straight alpha at the output. This smooths grass/leaves/cutout silhouettes without black transparent fringes. Opaque sprites reduce exactly to the old RGB path.
-3. **Every diffuse-atlas lookup directly inside the final Iris `main()` is now xBRZ-wrapped, even when its UV expression differs.** v1.6.2 only wrapped calls matching the first UV expression; shaderpacks can choose a different final albedo coordinate for specific materials, leaving block-specific NEAREST islands. Helper-function atlas probes remain untouched so POM/material coordinate logic is not fed xBRZ-filtered data.
-4. **Entity xBRZ now uses the same canonical `vec2 scale` Freescale geometry as terrain.** The old entity-only full-Jacobian experiment is removed.
-5. **Animated bilinear is alpha-correct.** It interpolates premultiplied RGBA; static terrain still has no LINEAR fallback.
-6. The GPU-vs-SpriteContents diagnostic now compares full **RGBA**, not only RGB.
+The mod supports the Sodium rendering path with shaders disabled and the Iris path with shaders enabled. Custom shaderpacks and resource packs can use unusual rendering paths; universal compatibility is not guaranteed. If reporting a problem, include Minecraft/Sodium/Iris versions, the shaderpack/resource pack, a screenshot and `logs/latest.log`.
 
-## Static terrain invariant
+Edge metadata is generated when resources load or supported dynamic textures change, rather than classified for every rendered fragment. Animated block metadata stays on the GPU. Larger resource packs can increase load time and memory use. No fixed FPS improvement or zero-cost rendering is claimed.
 
-In XBRZ mode a static block texture can only use xBRZ or NEAREST on an explicit error/missing path. LINEAR is reserved for the `META_ANIMATED` sentinel. Sodium RGSS is bypassed and the backing atlas sampler remains NEAREST.
+## Building from source
 
-## F6 / F7
+Use Java 25 and the included Gradle wrapper:
 
-`PATH`: green = valid static xBRZ metadata; yellow = animated; magenta = missing/padding; red = atlas-size mismatch.
-
-`EDGES`: cyan = at least one packed xBRZ corner state; dark gray = valid static texel without one.
-
-Healthy F7 still has `fb0`, `p/m/u=0/0/0`, `src=ok`, `dr=0`, `uv0`, `ov0`, `up0`.
-
-Build on the Java-25 machine:
-
-```powershell
-.\gradlew.bat clean build
+```sh
+./gradlew build
 ```
 
-On Linux/macOS, use `./gradlew clean build` with Java 25.
+On Windows, use `gradlew.bat build`. The distributable is `build/libs/smoothblocks-1.0.0.jar`; the sources JAR is optional. Do not distribute files from `build/validation`.
 
-Expected jar: `build/libs/smoothblocks-1.0.0-alpha.8.jar`.
+The build runs the portable regression checks. See [VALIDATION.md](VALIDATION.md) for the optional GPU and Fabric/Mixin checks, [DESIGN.md](DESIGN.md) for implementation details and [CHANGELOG.md](CHANGELOG.md) for version history.
 
-`build` includes the portable regression harnesses. Additional local checks:
+## License
 
-```powershell
-.\gradlew.bat mixinRegression
-.\gradlew.bat gpuRegression
-```
-
-The first exits before Minecraft opens a window and validates vanilla Mixin targets. The second requires OpenGL 4.5 and uses a hidden test window. The test-only dependency alias in `build/validation` is not a mod for distribution.
+GPL-3.0-or-later. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for xBRZ/xBR attribution.

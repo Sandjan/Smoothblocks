@@ -1,39 +1,21 @@
-# SmoothBlocks 1.6.3 design
+# Rendering design
 
-## Opaque source of truth
+SmoothBlocks separates resource-time edge classification (P0) from fragment reconstruction (P1). The alpha-aware classifier and premultiplied RGBA reconstruction are shared by terrain, entities and world items. GUI rendering is excluded by render scope as well as shader/pipeline selection.
 
-The validated Java Freescale lab remains authoritative for opaque images. `SmoothBlocksXbrzCore` is deliberately constructed so alpha=255 input produces byte-identical 16-bit metadata to v1.6.2/the lab.
+## Metadata
 
-## Stage A — atlas metadata
+The block atlas is captured at GPU mip level 0 after upload. Sprites are classified independently. RG8UI metadata packs four three-bit corner states and four boundary bits. `0xFFFE` marks missing/padding data; `0xFFFF` retains linear filtering for animated effects. The unused corner state 7 addresses a descriptor stored below the atlas metadata.
 
-After the block atlas is uploaded, SmoothBlocks reads the exact OpenGL level-0 RGBA8 atlas. Static sprites are cropped by content UV origin + logical dimensions and classified independently. The RG8UI metadata atlas stores TL/TR/BR/BL states plus hard sprite boundaries.
+Each descriptor contains sprite origin, width/wrap flag, height and a 32-bit metadata address. Opaque block sprites use periodic classification and sprite-local wrapping. Static interior texels retain direct metadata; only their borders resolve a descriptor. Transparent block sprites and other texture classes retain hard boundaries.
 
-`0xFFFF` = animated sprite (explicit bilinear). `0xFFFE` = missing/padding (NEAREST).
+Animated blocks precompute their distinct frames and Minecraft's quantized temporal intermediate steps at resource load. Identical metadata shares storage. Rendering selects the active frame by updating two RG8UI address texels (four bytes), without copying or classifying frame metadata. Water, lava, nether portal and fire retain the linear path. GPU texture-size limits still apply.
 
-### Alpha extension
+Other world texture metadata is cached by texture identity. Supported standalone uploads invalidate the cache and are coalesced before world rendering. Draws only look up prepared data. Closing textures or reloading resources disposes the associated metadata and caches.
 
-For color distance, use the established xBRZ alpha form:
+## Rendering integration
 
-```text
-d = min(alphaA, alphaB) * dYCbCr(rgbA, rgbB) + abs(alphaA - alphaB)
-```
+Vanilla shader sources are patched in ShaderManager's compilation cache. Sodium terrain and Iris shader transformation hooks reuse the canonical P1 kernel. Metadata setup follows the full draw setup call, including Iris early returns, and restores temporary sampler/texture bindings afterward. Mip selection policy is unchanged.
 
-with normalized alpha in the shader / equivalent 0..255 math on CPU. Fully opaque input is exactly the original xBRZ distance. Fully transparent hidden RGB cannot create false edges.
+Generated-item sides are marked through the common QuadCollection builder around the side-bake call. This includes Sodium's replacement baker. Vanilla and Sodium/Fabric Renderer API item output omit only those marked side faces during world xBRZ rendering. Front/back, GUI and actual 3D models retain their geometry.
 
-## Stage B — direct reconstruction
-
-The canonical Freescale geometry remains:
-
-```glsl
-float v = side * length(distv * scale);
-```
-
-RGB and alpha are reconstructed together. Accumulation is performed in premultiplied RGBA, then converted back to straight alpha for Minecraft's shader pipeline. For opaque sprites alpha remains 1, so p1 is mathematically the same RGB reconstruction as before.
-
-Minecraft derives the two-component local screen-pixels-per-source-texel scale from UV derivative magnitudes. No full-Jacobian experiment is used in the xBRZ kernel.
-
-## Iris integration
-
-Only diffuse-atlas calls directly inside transformed fragment `main()` are xBRZ-wrapped. All such direct main calls are wrapped because shaderpacks may select different albedo UV expressions by material. Helper-function atlas reads remain on the shaderpack path with the hardware sampler forced NEAREST in XBRZ mode.
-
-This is narrower than v1.6.1 (which rewrote helper probes and broke atlas association) and broader than v1.6.2 (which only wrapped the first UV-expression family and left material-specific NEAREST islands).
+The release has a fixed xBRZ policy and no keyboard hooks or in-game diagnostic controls. Internal shader uniforms and fallback paths remain available to the regression harnesses and error handling.

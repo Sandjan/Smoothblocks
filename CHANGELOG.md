@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0 — 2026-10-08
+
+- First public release for Minecraft 26.1.2 / Fabric with required Sodium and optional Iris.
+- Remove all keyboard hooks, sampling-mode switches and in-game diagnostic controls. xBRZ is always active for supported world rendering; GUI remains unchanged.
+- Include animated block metadata, sprite-local periodic interpolation for opaque blocks and repaired generated-item contours from the alpha releases.
+- Update installation, compatibility, architecture and validation documentation; remove obsolete development handoff files and saved test output. Pin Fabric Loom to 1.18.2.
+
 ## 1.0.0-alpha.8 — 2026-10-08
 
 - Use periodic xBRZ classification and sprite-local wrap-around for opaque block textures, including prepared animation frames. Other textures keep their original boundary rules.
