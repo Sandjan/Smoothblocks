@@ -1,6 +1,6 @@
 # Acceptance before stable 1.0
 
-Current candidate: 1.0.0-alpha.3. Keep the initial alpha.1 tag as a rollback baseline. Do not declare the two reported visual defects fully resolved until this matrix passes in-game.
+Current candidate: 1.0.0-alpha.4. Keep the initial alpha.1 tag as a rollback baseline. Do not declare the two reported visual defects fully resolved until this matrix passes in-game.
 
 ## Automated checks
 
@@ -9,6 +9,8 @@ Current candidate: 1.0.0-alpha.3. Keep the initial alpha.1 tag as a rollback bas
 - `gradlew.bat gpuRegression`: hidden OpenGL 4.5 rendering, pixel parity, actual world/GUI mode switching, metadata lifecycle and GL state restoration.
 
 ## In-game acceptance (pending)
+
+Alpha.4 intentionally omits generated 2D-item side walls in world XBRZ mode. Check front/back contours and the accepted edge-on thin appearance; these items are no longer closed extrusions. Verify that disabling XBRZ restores the walls and that GUI and block items are unaffected.
 
 For each of Fabric + Sodium, Fabric + Sodium + Iris with shaderpack disabled, and Iris with shaderpack enabled:
 

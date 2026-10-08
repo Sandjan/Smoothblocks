@@ -7,6 +7,9 @@ public final class MixinSmokeHarness implements PreLaunchEntrypoint {
     @Override public void onPreLaunch() {
         try {
             for (String name : new String[]{
+                    "net.minecraft.client.resources.model.geometry.BakedQuad",
+                    "net.minecraft.client.resources.model.cuboid.ItemModelGenerator",
+                    "net.minecraft.client.renderer.feature.ItemFeatureRenderer",
                     "net.minecraft.client.renderer.ShaderManager$CompilationCache",
                     "net.minecraft.client.renderer.GameRenderer",
                     "net.minecraft.client.gui.render.GuiRenderer",

@@ -1,5 +1,9 @@
 # SmoothBlocks validation
 
+## 1.0.0-alpha.4 — 2026-10-08
+
+`build mixinRegression` passed, including transformation of BakedQuad, ItemModelGenerator and all three quad-submission sites in ItemFeatureRenderer. Only generated side walls are tagged at model bake; omission is gated by world scope and active XBRZ. No shader changes. In-game appearance remains to be checked.
+
 ## 1.0.0-alpha.3 — 2026-10-08
 
 `build gpuRegression` passed. The existing item check now requires interpolated edge alpha and full RGBA parity with the shared terrain/entity kernel, replacing alpha.2's original-coverage assertion. GUI pixel parity and sprite-boundary checks still pass. In-game visual confirmation is pending.

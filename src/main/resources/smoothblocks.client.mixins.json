@@ -17,6 +17,9 @@
     "GlRenderPassMixin",
     "TextureManagerMixin",
     "GlTextureMixin",
+    "BakedQuadMixin",
+    "ItemModelGeneratorMixin",
+    "ItemFeatureRendererMixin",
     "ShaderManagerMixin"
   ],
   "injectors": {

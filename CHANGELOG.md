@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-alpha.4 — 2026-10-08
+
+- Omit only automatically generated item side walls during world XBRZ rendering, including glint/outline submissions. These per-pixel walls stretch an inset texel across the item thickness and conflict with the smooth front/back alpha contour.
+- Keep smooth front/back faces, GUI geometry, actual 3D models and original geometry in disabled/NEAREST/LINEAR modes. Generated items now have open sides and can look very thin edge-on; this is intentional.
+
 ## 1.0.0-alpha.3 — 2026-10-08
 
 - Remove the item-only override that restored unfiltered alpha after xBRZ. World/held items now use the same premultiplied RGBA reconstruction as terrain cutouts such as grass.
