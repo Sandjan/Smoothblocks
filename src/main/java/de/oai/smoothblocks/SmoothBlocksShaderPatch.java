@@ -517,16 +517,20 @@ public final class SmoothBlocksShaderPatch {
                         sourceSize.y + int(index / uint(sourceSize.x))));
                 }
 
-                uint smoothblocks_LoadMeta(ivec2 texel, ivec2 sourceSize) {
+                uint smoothblocks_LoadMeta(ivec2 texel, ivec2 sourceSize, out ivec4 wrapBounds) {
+                    wrapBounds = ivec4(0);
                     uint meta = smoothblocks_RawMeta(texel);
                     // State 7 is unused by xBRZ; its remaining bits address a sprite descriptor.
                     if ((meta & 7u) != 7u || meta == smoothblocks_META_ANIMATED) return meta;
-                    uint descriptor = (meta >> 3u) * 5u;
+                    uint descriptor = (meta >> 3u) * 6u;
                     ivec2 origin = ivec2(smoothblocks_ExtraMeta(descriptor, sourceSize),
                                          smoothblocks_ExtraMeta(descriptor + 1u, sourceSize));
-                    uint width = smoothblocks_ExtraMeta(descriptor + 2u, sourceSize);
-                    uint address = smoothblocks_ExtraMeta(descriptor + 3u, sourceSize)
-                        | (smoothblocks_ExtraMeta(descriptor + 4u, sourceSize) << 16u);
+                    uint widthFlags = smoothblocks_ExtraMeta(descriptor + 2u, sourceSize);
+                    uint width = widthFlags & 32767u;
+                    if ((widthFlags & 32768u) != 0u)
+                        wrapBounds = ivec4(origin, int(width), int(smoothblocks_ExtraMeta(descriptor + 3u, sourceSize)));
+                    uint address = smoothblocks_ExtraMeta(descriptor + 4u, sourceSize)
+                        | (smoothblocks_ExtraMeta(descriptor + 5u, sourceSize) << 16u);
                     ivec2 local = texel - origin;
                     return smoothblocks_ExtraMeta(address + uint(local.y) * width + uint(local.x), sourceSize);
                 }
@@ -558,7 +562,15 @@ public final class SmoothBlocksShaderPatch {
                     return q.a > 1e-6 ? vec4(q.rgb / q.a, q.a) : vec4(0.0);
                 }
 
-                vec4 smoothblocks_Fetch(sampler2D source, ivec2 center, ivec2 offset, uint meta) {
+                vec4 smoothblocks_Fetch(sampler2D source, ivec2 center, ivec2 offset, uint meta, ivec4 wrapBounds) {
+                    if (wrapBounds.z > 0) {
+                        ivec2 p = center + offset - wrapBounds.xy;
+                        if (p.x < 0) p.x += wrapBounds.z;
+                        else if (p.x >= wrapBounds.z) p.x -= wrapBounds.z;
+                        if (p.y < 0) p.y += wrapBounds.w;
+                        else if (p.y >= wrapBounds.w) p.y -= wrapBounds.w;
+                        return texelFetch(source, wrapBounds.xy + p, 0);
+                    }
                     if (offset.x < 0 && (meta & (1u << 12u)) != 0u) offset.x = 0;
                     if (offset.x > 0 && (meta & (1u << 13u)) != 0u) offset.x = 0;
                     if (offset.y < 0 && (meta & (1u << 14u)) != 0u) offset.y = 0;
@@ -590,7 +602,8 @@ public final class SmoothBlocksShaderPatch {
                         return texelFetch(source, centerTexel, 0);
                     }
 
-                    uint meta = smoothblocks_LoadMeta(centerTexel, sourceSize);
+                    ivec4 wrapBounds;
+                    uint meta = smoothblocks_LoadMeta(centerTexel, sourceSize, wrapBounds);
                     if (meta == smoothblocks_META_ANIMATED) {
                         // Yellow = intentional animated-only bilinear path.
                         if (smoothblocks_Debug != 0) return vec4(1.0, 1.0, 0.0, 1.0);
@@ -608,11 +621,11 @@ public final class SmoothBlocksShaderPatch {
                     }
 
                     vec2 pos = fract(texelCoord) - vec2(0.5);
-                    vec4 E = smoothblocks_Fetch(source, centerTexel, ivec2( 0, 0), meta);
-                    vec4 B = smoothblocks_Fetch(source, centerTexel, ivec2( 0,-1), meta);
-                    vec4 D = smoothblocks_Fetch(source, centerTexel, ivec2(-1, 0), meta);
-                    vec4 F = smoothblocks_Fetch(source, centerTexel, ivec2( 1, 0), meta);
-                    vec4 H = smoothblocks_Fetch(source, centerTexel, ivec2( 0, 1), meta);
+                    vec4 E = smoothblocks_Fetch(source, centerTexel, ivec2( 0, 0), meta, wrapBounds);
+                    vec4 B = smoothblocks_Fetch(source, centerTexel, ivec2( 0,-1), meta, wrapBounds);
+                    vec4 D = smoothblocks_Fetch(source, centerTexel, ivec2(-1, 0), meta, wrapBounds);
+                    vec4 F = smoothblocks_Fetch(source, centerTexel, ivec2( 1, 0), meta, wrapBounds);
+                    vec4 H = smoothblocks_Fetch(source, centerTexel, ivec2( 0, 1), meta, wrapBounds);
 
                     // Metadata corner mapping: TL bits 0..2, TR 3..5, BR 6..8, BL 9..11.
                     uint tl = smoothblocks_State(meta, 0u);

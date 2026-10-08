@@ -84,6 +84,7 @@ public final class GpuRegressionHarness {
             require(Arrays.equals(world, draw(irisEntity, source, meta, "Entity", 2)), "Iris and vanilla reconstruction parity");
             require(Arrays.equals(world, draw(terrain, source, meta, "", 2)), "Terrain/entity common p1 parity");
             animatedFrames(entity, source, pixels, world);
+            periodicBlock();
             checkDrawPolicy(entity, texture, world, baseline);
             int itemProgram = program(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/item", FRAGMENT));
             byte[] item = draw(itemProgram, source, meta, "Entity", 2);
@@ -245,9 +246,9 @@ public final class GpuRegressionHarness {
             var preparation = new net.minecraft.client.renderer.texture.SpriteLoader.Preparations(
                     8, 8, 0, sprite, java.util.Map.of(id, sprite), java.util.concurrent.CompletableFuture.completedFuture(null));
             short[] extra = SmoothBlocksAnimatedMetadata.prepare(preparation);
-            require(extra.length <= 5 + 4 * 64, "Duplicate frame metadata shares storage");
-            require(SmoothBlocksAnimatedMetadata.frameAddress(sprite, 0, 1) >= 5
-                    && SmoothBlocksAnimatedMetadata.frameAddress(sprite, 1, 1) >= 5, "Temporal intermediate steps precomputed");
+            require(extra.length <= 6 + 4 * 64, "Duplicate frame metadata shares storage");
+            require(SmoothBlocksAnimatedMetadata.frameAddress(sprite, 0, 1) >= 6
+                    && SmoothBlocksAnimatedMetadata.frameAddress(sprite, 1, 1) >= 6, "Temporal intermediate steps precomputed");
             int height = 8 + (extra.length + 7) / 8;
             ByteBuffer bytes = BufferUtils.createByteBuffer(8 * height * 2);
             for (int i = 0; i < 64; i++) bytes.putShort(i * 2, (short) SmoothBlocksAnimatedMetadata.marker(sprite));
@@ -257,7 +258,7 @@ public final class GpuRegressionHarness {
             ByteBuffer pointer = BufferUtils.createByteBuffer(4);
             int nextAddress = SmoothBlocksAnimatedMetadata.frameAddress(sprite, 1, 0);
             pointer.putInt(0, nextAddress);
-            SmoothBlocksXbrzMetadata.updatePointer(animated, 3, 8, 8, pointer);
+            SmoothBlocksXbrzMetadata.updatePointer(animated, 4, 8, 8, pointer);
             writePixels(source, second, 8, 8);
             short[] direct = SmoothBlocksXbrzCore.classifyArgb(8, 8, second).metadata();
             ByteBuffer directBytes = BufferUtils.createByteBuffer(128);
@@ -269,6 +270,50 @@ public final class GpuRegressionHarness {
             writePixels(source, first, 8, 8);
             glDeleteTextures(animated); glDeleteTextures(reference);
             SmoothBlocksAnimatedMetadata.clear();
+        }
+    }
+
+    private static void periodicBlock() {
+        int[] tile = new int[64], atlas = new int[128], repeated = new int[24 * 24];
+        Arrays.fill(atlas, 0xFFFF00FF);
+        var image = new com.mojang.blaze3d.platform.NativeImage(8, 8, true);
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
+            int color = (x + y) % 8 < 3 ? 0xFFFFAA33 : 0xFF224488;
+            tile[y * 8 + x] = color; atlas[y * 16 + x] = color; image.setPixel(x, y, color);
+        }
+        for (int y = 0; y < 24; y++) for (int x = 0; x < 24; x++) repeated[y * 24 + x] = tile[(y % 8) * 8 + x % 8];
+        short[] periodic = SmoothBlocksXbrzCore.classifyArgb(8, 8, tile, true).metadata();
+        short[] reference = SmoothBlocksXbrzCore.classifyArgb(24, 24, repeated).metadata();
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
+            require((periodic[y * 8 + x] & 0xFFF) == reference[(y + 8) * 24 + x + 8], "Periodic classifier matches repeated image");
+        var id = net.minecraft.resources.Identifier.withDefaultNamespace("block/test_periodic");
+        try (var contents = new net.minecraft.client.renderer.texture.SpriteContents(id,
+                new net.minecraft.client.resources.metadata.animation.FrameSize(8, 8), image)) {
+            class Sprite extends net.minecraft.client.renderer.texture.TextureAtlasSprite {
+                Sprite() { super(id, contents, 16, 8, 0, 0, 0); }
+            }
+            var sprite = new Sprite();
+            var preparations = new net.minecraft.client.renderer.texture.SpriteLoader.Preparations(16, 8, 0,
+                    sprite, java.util.Map.of(id, sprite), java.util.concurrent.CompletableFuture.completedFuture(null));
+            short[] extra = SmoothBlocksAnimatedMetadata.prepare(preparations, atlas);
+            ByteBuffer metadata = BufferUtils.createByteBuffer(16 * (8 + (extra.length + 15) / 16) * 2);
+            for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) metadata.putShort((y * 16 + x) * 2,
+                    (short) (x == 0 || y == 0 || x == 7 || y == 7 ? SmoothBlocksAnimatedMetadata.marker(sprite) : periodic[y * 8 + x]));
+            for (int i = 0; i < extra.length; i++) metadata.putShort((128 + i) * 2, extra[i]);
+            int meta = SmoothBlocksXbrzMetadata.uploadMetadata(16, metadata.capacity() / 32, metadata);
+            ByteBuffer refBytes = BufferUtils.createByteBuffer(reference.length * 2);
+            for (short value : reference) refBytes.putShort(value);
+            refBytes.flip();
+            int refMeta = SmoothBlocksXbrzMetadata.uploadMetadata(24, 24, refBytes);
+            int shader = program(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/entity",
+                    FRAGMENT.replace("texture(Sampler0, uv)", "texture(Sampler0, uv * vec2(0.5, 1.0))")));
+            int refShader = program(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/entity",
+                    FRAGMENT.replace("texture(Sampler0, uv)", "texture(Sampler0, (uv + vec2(1.0)) / 3.0)")));
+            int source = upload(atlas, 16, 8), refSource = upload(repeated, 24, 24);
+            require(Arrays.equals(draw(shader, source, meta, "Entity", 2), draw(refShader, refSource, refMeta, "Entity", 2)),
+                    "Periodic GPU output matches tiled reference and excludes adjacent atlas sprite");
+            glDeleteTextures(meta); glDeleteTextures(refMeta); glDeleteTextures(source); glDeleteTextures(refSource);
+            glDeleteProgram(shader); glDeleteProgram(refShader); SmoothBlocksAnimatedMetadata.clear();
         }
     }
 

@@ -48,6 +48,10 @@ public final class SmoothBlocksXbrzCore {
 
     /** Standalone-lab pass-0 classification; opaque input remains bit-identical to the validated lab. */
     public static Result classifyArgb(int width, int height, int[] argb) {
+        return classifyArgb(width, height, argb, false);
+    }
+
+    public static Result classifyArgb(int width, int height, int[] argb, boolean periodic) {
         if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid image size");
         if (argb == null || argb.length != width * height) {
             throw new IllegalArgumentException("Pixel array size mismatch");
@@ -58,27 +62,27 @@ public final class SmoothBlocksXbrzCore {
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                int a = getClamp(argb, width, height, x - 1, y - 1);
-                int b = getClamp(argb, width, height, x,     y - 1);
-                int c = getClamp(argb, width, height, x + 1, y - 1);
-                int d = getClamp(argb, width, height, x - 1, y);
-                int e = getClamp(argb, width, height, x,     y);
-                int f = getClamp(argb, width, height, x + 1, y);
-                int g = getClamp(argb, width, height, x - 1, y + 1);
-                int h = getClamp(argb, width, height, x,     y + 1);
-                int i = getClamp(argb, width, height, x + 1, y + 1);
+                int a = get(argb, width, height, periodic, x - 1, y - 1);
+                int b = get(argb, width, height, periodic, x,     y - 1);
+                int c = get(argb, width, height, periodic, x + 1, y - 1);
+                int d = get(argb, width, height, periodic, x - 1, y);
+                int e = get(argb, width, height, periodic, x,     y);
+                int f = get(argb, width, height, periodic, x + 1, y);
+                int g = get(argb, width, height, periodic, x - 1, y + 1);
+                int h = get(argb, width, height, periodic, x,     y + 1);
+                int i = get(argb, width, height, periodic, x + 1, y + 1);
 
                 int[] blend = new int[4]; // TL, TR, BR, BL
 
                 if (!((exactVisible(e, f) && exactVisible(h, i)) || (exactVisible(e, h) && exactVisible(f, i)))) {
                     double distHF = distVisible(g, e) + distVisible(e, c)
-                            + distVisible(getClamp(argb, width, height, x, y + 2), i)
-                            + distVisible(i, getClamp(argb, width, height, x + 2, y))
+                            + distVisible(get(argb, width, height, periodic, x, y + 2), i)
+                            + distVisible(i, get(argb, width, height, periodic, x + 2, y))
                             + 4.0 * distVisible(h, f);
                     double distEI = distVisible(d, h)
-                            + distVisible(h, getClamp(argb, width, height, x + 1, y + 2))
+                            + distVisible(h, get(argb, width, height, periodic, x + 1, y + 2))
                             + distVisible(b, f)
-                            + distVisible(f, getClamp(argb, width, height, x + 2, y + 1))
+                            + distVisible(f, get(argb, width, height, periodic, x + 2, y + 1))
                             + 4.0 * distVisible(e, i);
                     boolean dominant = DOMINANT_DIRECTION_THRESHOLD * distHF < distEI;
                     blend[2] = (distHF < distEI && !exactVisible(e, f) && !exactVisible(e, h))
@@ -86,12 +90,12 @@ public final class SmoothBlocksXbrzCore {
                 }
 
                 if (!((exactVisible(d, e) && exactVisible(g, h)) || (exactVisible(d, g) && exactVisible(e, h)))) {
-                    double distGE = distVisible(getClamp(argb, width, height, x - 2, y + 1), d)
+                    double distGE = distVisible(get(argb, width, height, periodic, x - 2, y + 1), d)
                             + distVisible(d, b)
-                            + distVisible(getClamp(argb, width, height, x - 1, y + 2), h)
+                            + distVisible(get(argb, width, height, periodic, x - 1, y + 2), h)
                             + distVisible(h, f) + 4.0 * distVisible(g, e);
-                    double distDH = distVisible(getClamp(argb, width, height, x - 2, y), g)
-                            + distVisible(g, getClamp(argb, width, height, x, y + 2))
+                    double distDH = distVisible(get(argb, width, height, periodic, x - 2, y), g)
+                            + distVisible(g, get(argb, width, height, periodic, x, y + 2))
                             + distVisible(a, e) + distVisible(e, i) + 4.0 * distVisible(d, h);
                     boolean dominant = DOMINANT_DIRECTION_THRESHOLD * distDH < distGE;
                     blend[3] = (distGE > distDH && !exactVisible(e, d) && !exactVisible(e, h))
@@ -100,13 +104,13 @@ public final class SmoothBlocksXbrzCore {
 
                 if (!((exactVisible(b, c) && exactVisible(e, f)) || (exactVisible(b, e) && exactVisible(c, f)))) {
                     double distEC = distVisible(d, b)
-                            + distVisible(b, getClamp(argb, width, height, x + 1, y - 2))
+                            + distVisible(b, get(argb, width, height, periodic, x + 1, y - 2))
                             + distVisible(h, f)
-                            + distVisible(f, getClamp(argb, width, height, x + 2, y - 1))
+                            + distVisible(f, get(argb, width, height, periodic, x + 2, y - 1))
                             + 4.0 * distVisible(e, c);
                     double distBF = distVisible(a, e) + distVisible(e, i)
-                            + distVisible(getClamp(argb, width, height, x, y - 2), c)
-                            + distVisible(c, getClamp(argb, width, height, x + 2, y))
+                            + distVisible(get(argb, width, height, periodic, x, y - 2), c)
+                            + distVisible(c, get(argb, width, height, periodic, x + 2, y))
                             + 4.0 * distVisible(b, f);
                     boolean dominant = DOMINANT_DIRECTION_THRESHOLD * distBF < distEC;
                     blend[1] = (distEC > distBF && !exactVisible(e, b) && !exactVisible(e, f))
@@ -114,12 +118,12 @@ public final class SmoothBlocksXbrzCore {
                 }
 
                 if (!((exactVisible(a, b) && exactVisible(d, e)) || (exactVisible(a, d) && exactVisible(b, e)))) {
-                    double distDB = distVisible(getClamp(argb, width, height, x - 2, y), a)
-                            + distVisible(a, getClamp(argb, width, height, x, y - 2))
+                    double distDB = distVisible(get(argb, width, height, periodic, x - 2, y), a)
+                            + distVisible(a, get(argb, width, height, periodic, x, y - 2))
                             + distVisible(g, e) + distVisible(e, c) + 4.0 * distVisible(d, b);
-                    double distAE = distVisible(getClamp(argb, width, height, x - 2, y - 1), d)
+                    double distAE = distVisible(get(argb, width, height, periodic, x - 2, y - 1), d)
                             + distVisible(d, h)
-                            + distVisible(getClamp(argb, width, height, x - 1, y - 2), b)
+                            + distVisible(get(argb, width, height, periodic, x - 1, y - 2), b)
                             + distVisible(b, f) + 4.0 * distVisible(a, e);
                     boolean dominant = DOMINANT_DIRECTION_THRESHOLD * distDB < distAE;
                     blend[0] = (distDB < distAE && !exactVisible(e, d) && !exactVisible(e, b))
@@ -218,6 +222,11 @@ public final class SmoothBlocksXbrzCore {
         if (blend == BLEND_NONE) return 0;
         if (!line) return 1;
         return 2 + (shallow ? 1 : 0) + (steep ? 2 : 0);
+    }
+
+    private static int get(int[] argb, int width, int height, boolean periodic, int x, int y) {
+        if (periodic) return argb[Math.floorMod(y, height) * width + Math.floorMod(x, width)];
+        return getClamp(argb, width, height, x, y);
     }
 
     private static int getClamp(int[] argb, int width, int height, int x, int y) {

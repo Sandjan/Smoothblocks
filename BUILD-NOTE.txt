@@ -1,4 +1,4 @@
-SmoothBlocks 1.0.0-alpha.7 - world-only precomputed entity/item reconstruction
+SmoothBlocks 1.0.0-alpha.8 - world-only precomputed entity/item reconstruction
 
 This source package targets Java 25 / Minecraft 26.1.2.
 
@@ -17,4 +17,4 @@ Build on the target machine:
   .\gradlew.bat clean build
 
 Expected output:
-  build/libs/smoothblocks-1.0.0-alpha.7.jar
+  build/libs/smoothblocks-1.0.0-alpha.8.jar

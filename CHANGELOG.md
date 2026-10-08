@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0-alpha.8 — 2026-10-08
+
+- Use periodic xBRZ classification and sprite-local wrap-around for opaque block textures, including prepared animation frames. Other textures keep their original boundary rules.
+- Reuse the existing metadata descriptor texture; static blocks resolve wrapping only at border pixels. All classification remains resource-time.
+- Keep transparent block textures, water/lava/portal/fire effects, standalone item/entity textures and GUI behavior unchanged.
+
 ## 1.0.0-alpha.7 — 2026-10-08
 
 - Precompute xBRZ metadata for animated block frames and quantized temporal intermediate steps at atlas load. Repeated frame states and identical metadata share storage.

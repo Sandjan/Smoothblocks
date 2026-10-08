@@ -113,7 +113,7 @@ public final class SmoothBlocksXbrzMetadata {
             return;
         }
 
-        short[] extra = SmoothBlocksAnimatedMetadata.prepare(preparations);
+        short[] extra = SmoothBlocksAnimatedMetadata.prepare(preparations, snapshot.argb);
         int metadataHeight = Math.addExact(height, (extra.length + width - 1) / width);
         if (metadataHeight > GL11C.glGetInteger(GL11C.GL_MAX_TEXTURE_SIZE))
             throw new IllegalStateException("Animated block metadata exceeds GPU texture size");
@@ -183,7 +183,9 @@ public final class SmoothBlocksXbrzMetadata {
                 }
 
                 int[] spriteArgb = cropArgb(snapshot.argb, width, ox, oy, sw, sh);
-                SmoothBlocksXbrzCore.Result classified = SmoothBlocksXbrzCore.classifyArgb(sw, sh, spriteArgb);
+                SmoothBlocksXbrzCore.Result classified = SmoothBlocksAnimatedMetadata.takeStaticResult(sprite);
+                boolean periodic = classified != null;
+                if (classified == null) classified = SmoothBlocksXbrzCore.classifyArgb(sw, sh, spriteArgb);
                 short[] meta = classified.metadata();
 
                 // Diagnostic only: compare the former SpriteContents source against the
@@ -205,7 +207,9 @@ public final class SmoothBlocksXbrzMetadata {
                     int srcRow = y * sw;
                     int dstRow = (oy + y) * width + ox;
                     for (int x = 0; x < sw; x++) {
-                        putMeta(data, (dstRow + x) * 2, meta[srcRow + x] & 0xFFFF);
+                        int value = periodic && (x == 0 || y == 0 || x == sw - 1 || y == sh - 1)
+                                ? SmoothBlocksAnimatedMetadata.marker(sprite) : meta[srcRow + x] & 0xFFFF;
+                        putMeta(data, (dstRow + x) * 2, value);
                     }
                 }
                 sprites++;

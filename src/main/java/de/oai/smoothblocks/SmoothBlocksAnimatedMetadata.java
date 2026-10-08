@@ -24,6 +24,7 @@ public final class SmoothBlocksAnimatedMetadata {
         final int slot;
         final int[][] offsets;
         int current;
+        SmoothBlocksXbrzCore.Result staticResult;
         Entry(int slot, int[][] offsets) {
             this.slot = slot; this.offsets = offsets; this.current = offsets[0][0];
         }
@@ -41,70 +42,99 @@ public final class SmoothBlocksAnimatedMetadata {
 
     /** Only block sprites; explicitly excluded effects keep the existing linear sentinel. */
     static boolean eligible(TextureAtlasSprite sprite) {
+        return sprite.contents().isAnimated() && blockSprite(sprite);
+    }
+
+    private static boolean blockSprite(TextureAtlasSprite sprite) {
         String path = sprite.contents().name().getPath();
-        return sprite.contents().isAnimated() && path.startsWith("block/")
+        return path.startsWith("block/")
                 && !path.startsWith("block/water_") && !path.startsWith("block/lava_")
                 && !path.equals("block/nether_portal")
                 && !path.matches("block/(soul_)?(fire_[01]|campfire_fire)");
     }
 
+    static boolean periodic(TextureAtlasSprite sprite) {
+        return blockSprite(sprite) && sprite.transparency().isOpaque();
+    }
+
     static short[] prepare(SpriteLoader.Preparations preparations) {
+        return prepare(preparations, null);
+    }
+
+    static short[] prepare(SpriteLoader.Preparations preparations, int[] atlasPixels) {
         clear(); atlasWidth = preparations.width(); atlasHeight = preparations.height();
-        var sprites = preparations.regions().values().stream().filter(SmoothBlocksAnimatedMetadata::eligible).toList();
+        var sprites = preparations.regions().values().stream().filter(s -> eligible(s) || periodic(s)).toList();
         if (sprites.size() >= 8191) throw new IllegalArgumentException("Too many animated block sprites");
-        int cursor = Math.multiplyExact(sprites.size(), 5);
+        int cursor = Math.multiplyExact(sprites.size(), 6);
         var chunks = new ArrayList<short[]>();
         var descriptors = new short[cursor];
         for (var sprite : sprites) {
             try {
                 var contents = sprite.contents();
-                Object animation = field(contents, "animatedTexture");
-                var frames = (List<?>) field(animation, "frames");
-                int columns = (int) field(animation, "frameRowSize");
-                boolean interpolate = (boolean) field(animation, "interpolateFrames");
-                NativeImage image = (NativeImage) field(contents, "originalImage");
                 int w = contents.width(), h = contents.height();
-                var pixels = new HashMap<Integer, int[]>();
-                var dedup = new HashMap<FrameKey, Integer>();
-                var identical = new HashMap<MetadataKey, Integer>();
-                int[][] offsets = new int[frames.size()][];
-                for (int f = 0; f < frames.size(); f++) {
-                    int index = (int) field(frames.get(f), "index");
-                    int next = (int) field(frames.get((f + 1) % frames.size()), "index");
-                    int time = (int) field(frames.get(f), "time");
-                    offsets[f] = new int[interpolate ? time : 1];
-                    for (int t = 0; t < offsets[f].length; t++) {
-                        // Matches Minecraft's quantized SpriteAnimationInfo draw index.
-                        int weight = interpolate ? (int) ((float) t / time * 1000f) : 0;
-                        var key = new FrameKey(index, weight == 0 ? index : next, weight);
-                        Integer offset = dedup.get(key);
-                        if (offset == null) {
-                            int[] a = pixels.computeIfAbsent(index, i -> read(image, i, columns, w, h));
-                            int[] source = a;
-                            if (weight != 0) {
-                                int[] b = pixels.computeIfAbsent(next, i -> read(image, i, columns, w, h));
-                                source = blend(a, b, weight);
-                            }
-                            short[] meta = SmoothBlocksXbrzCore.classifyArgb(w, h, source).metadata();
-                            var signature = new MetadataKey(meta);
-                            offset = identical.get(signature);
+                boolean wrap = periodic(sprite);
+                SmoothBlocksXbrzCore.Result staticResult = null;
+                Object animation = field(contents, "animatedTexture");
+                int[][] offsets;
+                if (!contents.isAnimated()) {
+                    int ox = Math.round(sprite.getU0() * atlasWidth), oy = Math.round(sprite.getV0() * atlasHeight);
+                    int[] source = new int[w * h];
+                    if (atlasPixels != null) {
+                        for (int y = 0; y < h; y++) System.arraycopy(atlasPixels, (oy + y) * atlasWidth + ox, source, y * w, w);
+                    } else source = read((NativeImage) field(contents, "originalImage"), 0, 1, w, h);
+                    staticResult = SmoothBlocksXbrzCore.classifyArgb(w, h, source, true);
+                    offsets = new int[][]{{cursor}};
+                    chunks.add(staticResult.metadata()); cursor = Math.addExact(cursor, w * h);
+                } else {
+                    var frames = (List<?>) field(animation, "frames");
+                    int columns = (int) field(animation, "frameRowSize");
+                    boolean interpolate = (boolean) field(animation, "interpolateFrames");
+                    NativeImage image = (NativeImage) field(contents, "originalImage");
+                    var pixels = new HashMap<Integer, int[]>();
+                    var dedup = new HashMap<FrameKey, Integer>();
+                    var identical = new HashMap<MetadataKey, Integer>();
+                    offsets = new int[frames.size()][];
+                    for (int f = 0; f < frames.size(); f++) {
+                        int index = (int) field(frames.get(f), "index");
+                        int next = (int) field(frames.get((f + 1) % frames.size()), "index");
+                        int time = (int) field(frames.get(f), "time");
+                        offsets[f] = new int[interpolate ? time : 1];
+                        for (int t = 0; t < offsets[f].length; t++) {
+                            // Matches Minecraft's quantized SpriteAnimationInfo draw index.
+                            int weight = interpolate ? (int) ((float) t / time * 1000f) : 0;
+                            var key = new FrameKey(index, weight == 0 ? index : next, weight);
+                            Integer offset = dedup.get(key);
                             if (offset == null) {
-                                offset = cursor; cursor = Math.addExact(cursor, meta.length);
-                                chunks.add(meta); identical.put(signature, offset);
+                                int[] a = pixels.computeIfAbsent(index, i -> read(image, i, columns, w, h));
+                                int[] source = a;
+                                if (weight != 0) {
+                                    int[] b = pixels.computeIfAbsent(next, i -> read(image, i, columns, w, h));
+                                    source = blend(a, b, weight);
+                                }
+                                short[] meta = SmoothBlocksXbrzCore.classifyArgb(w, h, source, wrap).metadata();
+                                var signature = new MetadataKey(meta);
+                                offset = identical.get(signature);
+                                if (offset == null) {
+                                    offset = cursor; cursor = Math.addExact(cursor, meta.length);
+                                    chunks.add(meta); identical.put(signature, offset);
+                                }
+                                dedup.put(key, offset);
                             }
-                            dedup.put(key, offset);
+                            offsets[f][t] = offset;
                         }
-                        offsets[f][t] = offset;
                     }
-                }
-                int slot = SPRITES.size(), d = slot * 5;
+                    }
+                int slot = SPRITES.size(), d = slot * 6;
                 descriptors[d] = (short) Math.round(sprite.getU0() * atlasWidth);
                 descriptors[d + 1] = (short) Math.round(sprite.getV0() * atlasHeight);
-                descriptors[d + 2] = (short) w;
-                descriptors[d + 3] = (short) offsets[0][0];
-                descriptors[d + 4] = (short) (offsets[0][0] >>> 16);
+                descriptors[d + 2] = (short) (w | (wrap ? 0x8000 : 0));
+                descriptors[d + 3] = (short) h;
+                descriptors[d + 4] = (short) offsets[0][0];
+                descriptors[d + 5] = (short) (offsets[0][0] >>> 16);
                 var entry = new Entry(slot, offsets);
-                SPRITES.put(contents, entry); ANIMATIONS.put(animation, entry);
+                entry.staticResult = staticResult;
+                SPRITES.put(contents, entry);
+                if (animation != null) ANIMATIONS.put(animation, entry);
             } catch (ReflectiveOperationException e) {
                 throw new IllegalStateException("Cannot prepare animated block " + sprite.contents().name(), e);
             }
@@ -120,6 +150,12 @@ public final class SmoothBlocksAnimatedMetadata {
     static int marker(TextureAtlasSprite sprite) {
         Entry entry = SPRITES.get(sprite.contents());
         return entry == null ? 0xFFFF : (entry.slot << 3) | 7; // xBRZ corner states only use 0..5.
+    }
+
+    static SmoothBlocksXbrzCore.Result takeStaticResult(TextureAtlasSprite sprite) {
+        Entry entry = SPRITES.get(sprite.contents());
+        if (entry == null) return null;
+        var result = entry.staticResult; entry.staticResult = null; return result;
     }
 
     static int frameAddress(TextureAtlasSprite sprite, int frame, int subFrame) {
@@ -143,7 +179,7 @@ public final class SmoothBlocksAnimatedMetadata {
         if (offset == entry.current) return;
         POINTER.put(0, (byte) offset).put(1, (byte) (offset >>> 8))
                 .put(2, (byte) (offset >>> 16)).put(3, (byte) (offset >>> 24));
-        int cell = entry.slot * 5 + 3;
+        int cell = entry.slot * 6 + 4;
         // The two address texels may straddle a row; update separately in that case.
         SmoothBlocksXbrzMetadata.updatePointer(cell, atlasWidth, atlasHeight, POINTER);
         entry.current = offset;

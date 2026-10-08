@@ -1,5 +1,9 @@
 # SmoothBlocks validation
 
+## 1.0.0-alpha.8 — 2026-10-08
+
+Build and GPU regressions passed. One additional fixture compares periodic classification and GPU rendering with the center tile of a 3x3 repeated image, including sprite-local isolation from a contrasting adjacent atlas sprite. Existing animated-frame, GUI and shared shader parity checks also pass. In-game visual confirmation and FPS measurement remain pending.
+
 ## 1.0.0-alpha.7 — 2026-10-08
 
 Build, existing regressions and Mixin transformation passed. One additional GPU fixture prepares real SpriteContents animation frames and intermediate steps, verifies frame-metadata indirection matches direct xBRZ, and switches frames using only a four-byte pointer update. Identical metadata shares storage. In-game animation appearance and FPS remain unverified.
