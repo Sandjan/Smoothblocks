@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-alpha.5 — 2026-10-08
+
+- Tag side walls from Sodium's replacement item model builder, which bypasses the vanilla tagging hook.
+- Skip those walls in Sodium's Fabric Renderer API item output as well as vanilla output. World XBRZ only; GUI and real 3D models retain their geometry.
+
 ## 1.0.0-alpha.4 — 2026-10-08
 
 - Omit only automatically generated item side walls during world XBRZ rendering, including glint/outline submissions. These per-pixel walls stretch an inset texel across the item thickness and conflict with the smooth front/back alpha contour.

@@ -4,4 +4,10 @@ package de.oai.smoothblocks;
 public interface SmoothBlocksGeneratedSide {
     void smoothblocks$markGeneratedSide();
     boolean smoothblocks$isGeneratedSide();
+
+    static boolean shouldOmit(Object quad) {
+        return SmoothBlocksRenderScope.isWorld()
+                && SmoothBlocksClient.getShaderModeCode() == SmoothBlocksClient.SHADER_MODE_XBRZ
+                && ((SmoothBlocksGeneratedSide) quad).smoothblocks$isGeneratedSide();
+    }
 }

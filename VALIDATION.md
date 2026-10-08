@@ -1,5 +1,9 @@
 # SmoothBlocks validation
 
+## 1.0.0-alpha.5 — 2026-10-08
+
+Offline build and existing regression checks passed. Sodium source/bytecode confirms that its replacement baker bypasses vanilla side tagging; alpha.5 covers that baker and the separate Fabric Renderer API emission path. No in-game visual verification performed.
+
 ## 1.0.0-alpha.4 — 2026-10-08
 
 `build mixinRegression` passed, including transformation of BakedQuad, ItemModelGenerator and all three quad-submission sites in ItemFeatureRenderer. Only generated side walls are tagged at model bake; omission is gated by world scope and active XBRZ. No shader changes. In-game appearance remains to be checked.
