@@ -1,21 +1,24 @@
 package de.oai.smoothblocks.mixin;
 
-import de.oai.smoothblocks.SmoothBlocksEntityXbrzGpuBridge;
-import de.oai.smoothblocks.SmoothBlocksDrawState;
-import org.spongepowered.asm.mixin.injection.Coerce;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import java.util.Collection;
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.platform.NativeImage;
-import java.nio.ByteBuffer;
-import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.textures.GpuTexture;
+import com.mojang.blaze3d.vertex.VertexFormat;
+import de.oai.smoothblocks.SmoothBlocksDrawState;
+import de.oai.smoothblocks.SmoothBlocksEntityXbrzGpuBridge;
+import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
+import java.nio.ByteBuffer;
+import java.util.Collection;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Configures resource-time entity metadata after the final Minecraft/Iris program setup. */
+/** Tracks level-0 writes and configures metadata after final program setup; higher mips do not affect classification. */
 @Mixin(targets = "com.mojang.blaze3d.opengl.GlCommandEncoder")
 public abstract class GlCommandEncoderMixin {
     @Inject(method = "writeToTexture(Lcom/mojang/blaze3d/textures/GpuTexture;Lcom/mojang/blaze3d/platform/NativeImage;IIIIIIII)V", at = @At("RETURN"))
@@ -36,8 +39,7 @@ public abstract class GlCommandEncoderMixin {
         if (mip == 0) SmoothBlocksTextureMetadata.changed(destination);
     }
 
-    // Wrap the CALL, not trySetup's RETURN: Iris also injects at RETURN and may
-    // cancel at HEAD. This runs after its final program/sampler setup in both cases.
+    // Wrap the caller: Iris can cancel trySetup at HEAD or alter setup at RETURN; both must finish first.
     @WrapOperation(method = {"executeDraw", "executeDrawMultiple"}, at = @At(value = "INVOKE",
             target = "Lcom/mojang/blaze3d/opengl/GlCommandEncoder;trySetup(Lcom/mojang/blaze3d/opengl/GlRenderPass;Ljava/util/Collection;)Z"))
     private boolean smoothblocks$configureEntityMode(@Coerce Object encoder, @Coerce Object pass,
@@ -49,8 +51,25 @@ public abstract class GlCommandEncoderMixin {
         return ready;
     }
 
-    @Inject(method = {"executeDraw", "executeDrawMultiple"}, at = @At("RETURN"))
-    private void smoothblocks$restoreMetadataBinding(CallbackInfo ci) {
-        SmoothBlocksEntityXbrzGpuBridge.release();
+    /** Cover the entire draw, including exceptions after Iris or metadata setup. */
+    @WrapMethod(method = "executeDraw")
+    private void smoothblocks$scopeDraw(@Coerce Object pass, int baseVertex, int firstIndex, int count,
+                                        VertexFormat.IndexType indexType, int instances, Operation<Void> original) {
+        try {
+            original.call(pass, baseVertex, firstIndex, count, indexType, instances);
+        } finally {
+            SmoothBlocksEntityXbrzGpuBridge.release();
+        }
+    }
+
+    @WrapMethod(method = "executeDrawMultiple")
+    private void smoothblocks$scopeMultiple(@Coerce Object pass, Collection<?> draws, GpuBuffer indexBuffer,
+                                            VertexFormat.IndexType indexType, Collection<String> uniforms,
+                                            Object userData, Operation<Void> original) {
+        try {
+            original.call(pass, draws, indexBuffer, indexType, uniforms, userData);
+        } finally {
+            SmoothBlocksEntityXbrzGpuBridge.release();
+        }
     }
 }

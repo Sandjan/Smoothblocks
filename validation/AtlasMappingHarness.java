@@ -3,10 +3,7 @@ package de.oai.smoothblocks;
 import java.util.Arrays;
 import java.util.Random;
 
-/**
- * Dependency-free stress test for the exact atlas addressing/byte packing used by
- * SmoothBlocksXbrzMetadata + the GLSL RG8UI decoder.  No Minecraft classes needed.
- */
+/** Dependency-free atlas addressing and RG8UI packing stress test; the fixed seed makes failures reproducible. */
 public final class AtlasMappingHarness {
     private static final int MISSING = 0xFFFE;
     private static final int ANIMATED = 0xFFFF;
@@ -88,6 +85,7 @@ public final class AtlasMappingHarness {
                 + " staticTexels=" + staticTexels + " animatedTexels=" + animatedTexels);
     }
 
+    /** Bounded random placement keeps fixture generation finite; null means this sprite is skipped. */
     private static int[] findFree(Random rnd, boolean[] used, int aw, int ah, int sw, int sh) {
         for (int tries = 0; tries < 200; tries++) {
             int ox = rnd.nextInt(aw - sw + 1);

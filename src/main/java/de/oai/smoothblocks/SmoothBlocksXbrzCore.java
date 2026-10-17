@@ -1,15 +1,6 @@
 package de.oai.smoothblocks;
 
-/**
- * Dependency-free CPU implementation of xBRZ-Freescale pass 0 with an
- * alpha-aware extension that is exactly identical for fully opaque input.
- *
- * <p>This is intentionally kept algorithmically identical to the validated
- * {@code FreescalePreprocessor} in the standalone xBRZ lab. It operates on
- * Java ARGB pixels (0xAARRGGBB) and packs one unsigned 16-bit descriptor per
- * source texel: TL/TR/BR/BL xBRZ corner states in 3 bits each plus four hard
- * image/sprite boundary bits.</p>
- */
+/** CPU pass 0; ARGB input, unsigned 16-bit output: TL/TR/BR/BL in bits 0..11, boundary flags in 12..15. */
 public final class SmoothBlocksXbrzCore {
     private SmoothBlocksXbrzCore() {}
 
@@ -36,6 +27,7 @@ public final class SmoothBlocksXbrzCore {
     private static final double SCALE_B = 0.5 / (1.0 - WB);
     private static final double SCALE_R = 0.5 / (1.0 - WR);
 
+    /** Corner counts overlap within a texel; texelsWithEdge counts each affected texel once. */
     public record Stats(long texels, long texelsWithEdge, long cornerStates,
                         long cornerOnly, long diagonal, long shallow,
                         long steep, long shallowSteep) {
@@ -44,16 +36,18 @@ public final class SmoothBlocksXbrzCore {
         }
     }
 
+    /** Row-major metadata; treat each signed short as unsigned when decoding. */
     public record Result(short[] metadata, Stats stats) {}
 
-    /** Standalone-lab pass-0 classification; opaque input remains bit-identical to the validated lab. */
+    /** Clamped boundaries; fully opaque input retains the reference xBRZ decisions. */
     public static Result classifyArgb(int width, int height, int[] argb) {
         return classifyArgb(width, height, argb, false);
     }
 
+    /** Periodic mode wraps classifier reads; boundary flags remain set for the shader to override via sprite descriptors. */
     public static Result classifyArgb(int width, int height, int[] argb, boolean periodic) {
         if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid image size");
-        if (argb == null || argb.length != width * height) {
+        if (argb == null || argb.length != (long) width * height) {
             throw new IllegalArgumentException("Pixel array size mismatch");
         }
 
@@ -62,6 +56,7 @@ public final class SmoothBlocksXbrzCore {
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
+                // a..i form a row-major 3x3 neighborhood around e; direction tests also read a two-texel halo.
                 int a = get(argb, width, height, periodic, x - 1, y - 1);
                 int b = get(argb, width, height, periodic, x,     y - 1);
                 int c = get(argb, width, height, periodic, x + 1, y - 1);
@@ -74,6 +69,7 @@ public final class SmoothBlocksXbrzCore {
 
                 int[] blend = new int[4]; // TL, TR, BR, BL
 
+                // Compare competing diagonals at each corner; the central diagonal receives fourfold weight.
                 if (!((exactVisible(e, f) && exactVisible(h, i)) || (exactVisible(e, h) && exactVisible(f, i)))) {
                     double distHF = distVisible(g, e) + distVisible(e, c)
                             + distVisible(get(argb, width, height, periodic, x, y + 2), i)
@@ -166,6 +162,7 @@ public final class SmoothBlocksXbrzCore {
         return new Result(out, stats);
     }
 
+    /** Reject competing corners and enclosed color chains before selecting line geometry; other corners rotate this test. */
     private static int stateBottomRight(int[] blend, int a,int b,int c,int d,int e,int f,int g,int h,int i) {
         int z = blend[2];
         boolean line = z == BLEND_DOMINANT || (z == BLEND_NORMAL &&
@@ -218,6 +215,7 @@ public final class SmoothBlocksXbrzCore {
         return packedState(x, true, shallow, steep);
     }
 
+    /** Shader contract: 0 none, 1 corner, 2 diagonal, 3 shallow, 4 steep, 5 both. */
     private static int packedState(int blend, boolean line, boolean shallow, boolean steep) {
         if (blend == BLEND_NONE) return 0;
         if (!line) return 1;
@@ -237,12 +235,7 @@ public final class SmoothBlocksXbrzCore {
         return argb[y * width + x];
     }
 
-    /**
-     * Exact equality in visible (premultiplied-alpha) color space. For fully opaque
-     * texels this is byte-for-byte the old RGB equality, preserving the validated
-     * opaque xBRZ classifier. Fully transparent texels compare equal regardless of
-     * hidden RGB so transparent-black padding cannot invent fake color edges.
-     */
+    /** Ignore hidden RGB at alpha zero; preserve exact RGB equality for opaque texels. */
     private static boolean exactVisible(int p, int q) {
         int ap = (p >>> 24) & 0xFF;
         int aq = (q >>> 24) & 0xFF;
@@ -259,13 +252,7 @@ public final class SmoothBlocksXbrzCore {
         return distVisible(p, q) < EQUAL_COLOR_TOLERANCE;
     }
 
-    /**
-     * Established xBRZ alpha-aware distance (the same construction used by the Java
-     * xBRZ reference implementation): interpolate RGB distance by the lower alpha and
-     * add the alpha difference itself. This gives exactly the validated YCbCr distance
-     * for two opaque texels, zero distance for two fully transparent texels regardless
-     * of hidden RGB, and a strong edge for opaque/transparent silhouettes.
-     */
+    /** YCbCr distance weighted by the lower alpha, plus alpha difference; opaque distance stays unchanged. */
     private static double distVisible(int p, int q) {
         int ap = (p >>> 24) & 0xFF;
         int aq = (q >>> 24) & 0xFF;

@@ -1,5 +1,6 @@
 import de.oai.smoothblocks.SmoothBlocksShaderPatch;
 
+/** Synthetic Sodium and post-transform Iris fixtures; checks rewrite coverage while preserving helper probes. */
 public class PatchHarness {
   public static void main(String[] args) {
     String src = """
@@ -25,15 +26,9 @@ void main(){ vec4 c=u_UseRGSS?sampleRGSS(u_BlockTex,vec2(.5),vec2(1.0/1024.0)):s
     require(p.contains("SMOOTHBLOCKS_XBRZ_DIRECT_V13"), "v13 marker");
     require(p.contains("smoothblocks_OriginalNearest"), "nearest rename");
     require(p.contains("smoothblocks_OriginalRGSS"), "rgss rename");
-    require(p.contains("vec2 smoothblocks_LocalScale"), "canonical vec2 scale adapter");
-    require(p.contains("length(distv * scale)"), "canonical freescale p1 geometry");
-    require(!p.contains("mat2 smoothblocks_TexelToScreen"), "terrain full-Jacobian experiment removed");
     require(p.contains("uniform int smoothblocks_Debug"), "compact visual debug uniform");
-    require(p.contains("return smoothblocks_XbrzDirect(sampler, uv, smoothblocks_LocalScale(pixelSize, du, dv));"), "Sodium direct path");
-    require(p.contains("vec4 smoothblocks_AnimatedLinear"), "animated-only linear path");
 
-    // This models an already Iris-transformed fragment shader. The helper-function
-    // atlas read must stay untouched; only direct reads inside main() become xBRZ.
+    // Different UV branches in main must be patched while the POM helper probe stays untouched.
     String iris = """
 #version 330 core
 uniform sampler2D gtexture;
@@ -55,7 +50,6 @@ void main(){
     require(finished.contains("smoothblocks_TerrainSampleLod(gtexture"), "Iris main lod patched");
     require(finished.contains("textureLod(gtexture, uv + vec2(0.001), 0.0)"), "auxiliary helper read untouched");
     require(finished.contains("smoothblocks_TerrainSample(gtexture,uv + vec2(0.002))"), "different-UV main albedo branch patched");
-    require(finished.contains("vec2 smoothblocks_LocalScale"), "Iris canonical scale adapter");
     require(SmoothBlocksShaderPatch.terrainStatsString().contains("aux=1/0"), "helper-only auxiliary read remains");
     System.out.println("PASS shader-patch v1.6.3 chars="+p.length()+" stats="+SmoothBlocksShaderPatch.terrainStatsString());
   }

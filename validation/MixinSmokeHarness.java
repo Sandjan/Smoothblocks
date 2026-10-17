@@ -22,12 +22,13 @@ public final class MixinSmokeHarness implements PreLaunchEntrypoint {
                     "net.minecraft.client.renderer.texture.ReloadableTexture",
                     "net.minecraft.client.renderer.texture.TextureAtlas",
                     "net.minecraft.client.renderer.texture.TextureManager"}) {
-                Class<?> cls = Class.forName(name, false, getClass().getClassLoader());
-                boolean injected = java.util.Arrays.stream(cls.getDeclaredMethods())
-                        .anyMatch(method -> method.getName().contains("smoothblocks"));
-                if (!injected) throw new AssertionError("No injected methods: " + name);
+                verifyTransformed(name);
             }
-            if (Boolean.getBoolean("smoothblocks.testSodiumItems")) verifyItemBake();
+            if (Boolean.getBoolean("smoothblocks.testSodiumItems")) {
+                verifyTransformed("net.caffeinemc.mods.sodium.client.render.chunk.ShaderChunkRenderer");
+                verifyTransformed("net.caffeinemc.mods.sodium.client.gl.shader.ShaderLoader");
+                verifyItemBake();
+            }
             System.out.println("PASS Fabric/Mixin: all vanilla target classes transformed and verified; no game window launched");
             System.exit(0);
         } catch (Throwable failure) {
@@ -36,6 +37,14 @@ public final class MixinSmokeHarness implements PreLaunchEntrypoint {
         }
     }
 
+    private static void verifyTransformed(String name) throws ClassNotFoundException {
+        Class<?> target = Class.forName(name, false, MixinSmokeHarness.class.getClassLoader());
+        boolean injected = java.util.Arrays.stream(target.getDeclaredMethods())
+                .anyMatch(method -> method.getName().contains("smoothblocks"));
+        if (!injected) throw new AssertionError("No injected methods: " + name);
+    }
+
+    /** Requires real Sodium; bake both main faces and walls, then verify only world wall submissions are omitted. */
     private static void verifyItemBake() throws Exception {
         Class.forName("net.caffeinemc.mods.sodium.client.render.frapi.render.ItemRenderContext", false,
                 MixinSmokeHarness.class.getClassLoader());
@@ -50,6 +59,7 @@ public final class MixinSmokeHarness implements PreLaunchEntrypoint {
                     ctor.newInstance(id, contents, 2, 2, 0, 0, 0);
             var material = new net.minecraft.client.resources.model.geometry.BakedQuad.MaterialInfo(
                     sprite, null, null, 0, false, 0);
+            // Identity interner avoids loading model caches; canonicalization is irrelevant to wall tagging.
             var interner = new net.minecraft.client.resources.model.ModelBaker.Interner() {
                 public org.joml.Vector3fc vector(org.joml.Vector3fc v) { return v; }
                 public net.minecraft.client.resources.model.geometry.BakedQuad.MaterialInfo materialInfo(

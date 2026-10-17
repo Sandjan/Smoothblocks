@@ -10,6 +10,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+/** Covers dynamic textures that bypass resource reload hooks and releases owned caches at manager shutdown. */
 @Mixin(TextureManager.class)
 public abstract class TextureManagerMixin {
     @Inject(method = "close", at = @At("HEAD"))

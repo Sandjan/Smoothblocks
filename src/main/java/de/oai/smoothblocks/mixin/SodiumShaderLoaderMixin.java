@@ -1,7 +1,7 @@
 package de.oai.smoothblocks.mixin;
 
-import de.oai.smoothblocks.SmoothBlocksClient;
 import de.oai.smoothblocks.SmoothBlocksShaderPatch;
+import de.oai.smoothblocks.SmoothBlocksXbrzGpuBridge;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
@@ -17,7 +17,7 @@ public abstract class SodiumShaderLoaderMixin {
         String source = cir.getReturnValue();
         String patched = SmoothBlocksShaderPatch.patchSodiumFragment(source);
         if (patched != null && !patched.equals(source)) {
-            SmoothBlocksClient.noteDefaultSodiumShaderPatched();
+            SmoothBlocksXbrzGpuBridge.clearProgramCache();
             cir.setReturnValue(patched);
         }
     }

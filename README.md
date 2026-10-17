@@ -8,7 +8,7 @@
 
 Screenshots may include other mods and shader effects; those are not bundled with SmoothBlocks.
 
-SmoothBlocks gives Minecraft's pixel textures a smoother, stylized look using two-stage xBRZ reconstruction. Version **1.0.0** targets **Minecraft 26.1.2 on Fabric**.
+SmoothBlocks gives Minecraft's pixel textures a smoother, stylized look using two-stage xBRZ reconstruction. The current project version is **1.0.0** and targets **Minecraft 26.1.2 on Fabric**.
 
 ## Requirements and installation
 
@@ -44,7 +44,7 @@ Use Java 25 and the included Gradle wrapper:
 
 On Windows, use `gradlew.bat build`. The distributable is `build/libs/smoothblocks-1.0.0.jar`; the sources JAR is optional. Do not distribute files from `build/validation`.
 
-The build runs the portable regression checks. See [VALIDATION.md](VALIDATION.md) for the optional GPU and Fabric/Mixin checks, [DESIGN.md](DESIGN.md) for implementation details and [CHANGELOG.md](CHANGELOG.md) for version history.
+The build runs four portable regression tasks. Use a clean build after removing or renaming source files. See [VALIDATION.md](VALIDATION.md) for the optional GPU and Fabric/Mixin checks, [DESIGN.md](DESIGN.md) for implementation details and [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Disclaimer
 

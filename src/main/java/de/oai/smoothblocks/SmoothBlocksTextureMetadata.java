@@ -2,59 +2,60 @@ package de.oai.smoothblocks;
 
 import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.textures.GpuTexture;
-import net.minecraft.client.renderer.texture.SpriteLoader;
-import net.minecraft.client.renderer.texture.TextureAtlas;
-import org.lwjgl.system.MemoryUtil;
-
-import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Collections;
 import java.util.Set;
+import net.minecraft.client.renderer.texture.SpriteLoader;
+import net.minecraft.client.renderer.texture.TextureAtlas;
 
-/** Resource-time p0 cache. Draws only look up existing metadata; they never classify/read back. */
+import static de.oai.smoothblocks.SmoothBlocksMetadataFormat.*;
+
+/** Resource-time cache; draw-time lookups never allocate, classify or read pixels back. */
 public final class SmoothBlocksTextureMetadata {
-    private SmoothBlocksTextureMetadata() {}
-    private record Region(int x, int y, int width, int height, boolean animated) {}
+    record Region(int x, int y, int width, int height, boolean animated) {}
+
     private static final class Entry {
-        final List<Region> regions; // null = standalone texture
-        final boolean item;
+        final List<Region> regions; // null means a standalone texture
         int metadata;
         int[] pixels;
-        boolean dirty;
-        Entry(List<Region> regions, boolean item) { this.regions = regions; this.item = item; }
+
+        Entry(List<Region> regions) { this.regions = regions; }
+
+        void close() {
+            if (metadata != 0) GlStateManager._deleteTexture(metadata);
+            metadata = 0;
+            pixels = null;
+        }
     }
+
     private static final Map<GpuTexture, Entry> ENTRIES = new IdentityHashMap<>();
     private static final Set<GpuTexture> DIRTY = Collections.newSetFromMap(new IdentityHashMap<>());
     private static long builds;
     private static int fallback;
 
+    private SmoothBlocksTextureMetadata() {}
+
+    /** A valid integer sampler remains mandatory even for GUI draws with reconstruction disabled. */
     public static int fallbackTexture() {
-        if (fallback == 0) {
-            ByteBuffer bytes = MemoryUtil.memAlloc(2);
-            try {
-                bytes.put(0, (byte) 0xFE).put(1, (byte) 0xFF);
-                fallback = SmoothBlocksXbrzMetadata.uploadMetadata(1, 1, bytes);
-            } finally { MemoryUtil.memFree(bytes); }
-        }
+        if (fallback == 0) fallback = SmoothBlocksXbrzMetadata.uploadMetadata(1, 1, new short[]{(short) MISSING});
         return fallback;
     }
 
     public static void close() {
-        for (Entry entry : ENTRIES.values()) {
-            if (entry.metadata != 0) GlStateManager._deleteTexture(entry.metadata);
-        }
+        ENTRIES.values().forEach(Entry::close);
         ENTRIES.clear();
         DIRTY.clear();
         if (fallback != 0) GlStateManager._deleteTexture(fallback);
         fallback = 0;
     }
 
+    /** Requires the render thread; captures the uploaded level 0 immediately. */
     public static void registerTexture(GpuTexture texture) {
         if (texture == null || texture.isClosed() || ENTRIES.containsKey(texture)) return;
-        Entry entry = new Entry(null, false);
+        Entry entry = new Entry(null);
         ENTRIES.put(texture, entry);
         rebuild(texture, entry);
     }
@@ -66,19 +67,15 @@ public final class SmoothBlocksTextureMetadata {
         List<Region> regions = preparations.regions().values().stream().map(sprite -> new Region(
                 Math.round(sprite.getU0() * width), Math.round(sprite.getV0() * height),
                 sprite.contents().width(), sprite.contents().height(), sprite.contents().isAnimated())).toList();
-        Entry entry = new Entry(regions, TextureAtlas.LOCATION_ITEMS.equals(atlas.location()));
+        Entry entry = new Entry(regions);
         ENTRIES.put(texture, entry);
         rebuild(texture, entry);
     }
 
-    /** Called after upload/copy. Coalesce partial updates before the next world render. */
+    /** Coalesces standalone uploads; atlas animation follows its separate frame/sentinel policy. */
     public static void changed(GpuTexture texture) {
         Entry entry = ENTRIES.get(texture);
-        // Atlases use the same animated-sprite sentinel policy as the terrain path.
-        if (entry != null && entry.regions == null) {
-            entry.dirty = true;
-            DIRTY.add(texture);
-        }
+        if (entry != null && entry.regions == null) DIRTY.add(texture);
     }
 
     public static void refreshChanged() {
@@ -89,7 +86,6 @@ public final class SmoothBlocksTextureMetadata {
         DIRTY.clear();
     }
 
-    /** No allocation, readback or classification on this path. */
     public static int textureId(GpuTexture texture) {
         if (texture == null || texture.isClosed()) return 0;
         if (texture instanceof com.mojang.blaze3d.opengl.GlTexture gl
@@ -97,67 +93,55 @@ public final class SmoothBlocksTextureMetadata {
             return SmoothBlocksXbrzMetadata.textureId();
         }
         Entry entry = ENTRIES.get(texture);
-        return entry == null || entry.dirty ? 0 : entry.metadata;
+        return entry == null || DIRTY.contains(texture) ? 0 : entry.metadata;
     }
 
-    public static boolean isItemAtlas(GpuTexture texture) {
-        Entry entry = ENTRIES.get(texture);
-        return entry != null && entry.item;
-    }
-
+    /** GPU replacement stays here; CPU atlas policy can be checked without a GL context. */
     private static void rebuild(GpuTexture texture, Entry entry) {
-        entry.dirty = false;
         try {
             var image = SmoothBlocksXbrzMetadata.captureLevel0(texture);
             if (entry.metadata != 0 && Arrays.equals(entry.pixels, image.argb())) return;
-            short[] metadata;
-            if (entry.regions == null) {
-                metadata = SmoothBlocksXbrzCore.classifyArgb(image.width(), image.height(), image.argb()).metadata();
-            } else {
-                metadata = new short[Math.multiplyExact(image.width(), image.height())];
-                Arrays.fill(metadata, (short) 0xFFFE);
-                for (Region r : entry.regions) {
-                    if (r.x < 0 || r.y < 0 || r.width <= 0 || r.height <= 0
-                            || r.x + r.width > image.width() || r.y + r.height > image.height()) {
-                        throw new IllegalArgumentException("Sprite outside atlas");
-                    }
-                    int[] crop = new int[r.width * r.height];
-                    for (int y = 0; y < r.height; y++) {
-                        System.arraycopy(image.argb(), (r.y + y) * image.width() + r.x, crop, y * r.width, r.width);
-                    }
-                    short[] local = r.animated ? null : SmoothBlocksXbrzCore.classifyArgb(r.width, r.height, crop).metadata();
-                    for (int y = 0; y < r.height; y++) {
-                        int offset = (r.y + y) * image.width() + r.x;
-                        if (r.animated) Arrays.fill(metadata, offset, offset + r.width, (short) 0xFFFF);
-                        else System.arraycopy(local, y * r.width, metadata, offset, r.width);
-                    }
-                }
-            }
-            ByteBuffer bytes = MemoryUtil.memAlloc(Math.multiplyExact(metadata.length, 2));
-            try {
-                for (short value : metadata) { bytes.put((byte) value); bytes.put((byte) (value >>> 8)); }
-                bytes.flip();
-                int replacement = SmoothBlocksXbrzMetadata.uploadMetadata(image.width(), image.height(), bytes);
-                if (entry.metadata != 0) GlStateManager._deleteTexture(entry.metadata);
-                entry.metadata = replacement;
-                // Standalone dynamic textures can upload unchanged pixels; avoid reclassification.
-                entry.pixels = entry.regions == null ? image.argb() : null;
-                builds++;
-            } finally { MemoryUtil.memFree(bytes); }
+            short[] metadata = classify(image.width(), image.height(), image.argb(), entry.regions);
+            int replacement = SmoothBlocksXbrzMetadata.uploadMetadata(image.width(), image.height(), metadata);
+            entry.close();
+            entry.metadata = replacement;
+            entry.pixels = entry.regions == null ? image.argb() : null;
+            builds++;
         } catch (RuntimeException failure) {
-            if (entry.metadata != 0) GlStateManager._deleteTexture(entry.metadata);
-            entry.metadata = 0;
-            entry.pixels = null;
+            entry.close();
             System.err.println("[SmoothBlocks] Metadata unavailable for " + texture.getLabel() + ": " + failure);
+        }
+    }
+
+    /** Each sprite is isolated; padding stays missing and animated regions retain the linear sentinel. */
+    static short[] classify(int width, int height, int[] pixels, List<Region> regions) {
+        if (regions == null) return SmoothBlocksXbrzCore.classifyArgb(width, height, pixels).metadata();
+        short[] metadata = new short[Math.multiplyExact(width, height)];
+        Arrays.fill(metadata, (short) MISSING);
+        for (Region region : regions) writeRegion(metadata, width, height, pixels, region);
+        return metadata;
+    }
+
+    private static void writeRegion(short[] output, int width, int height, int[] pixels, Region region) {
+        if (region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0
+                || (long) region.x + region.width > width || (long) region.y + region.height > height) {
+            throw new IllegalArgumentException("Sprite outside atlas");
+        }
+        short[] local = region.animated ? null : SmoothBlocksXbrzCore.classifyArgb(
+                region.width, region.height, SmoothBlocksPixels.crop(
+                        pixels, width, region.x, region.y, region.width, region.height)).metadata();
+        for (int row = 0; row < region.height; row++) {
+            int offset = (region.y + row) * width + region.x;
+            if (region.animated) Arrays.fill(output, offset, offset + region.width, (short) ANIMATED_LINEAR);
+            else System.arraycopy(local, row * region.width, output, offset, region.width);
         }
     }
 
     public static void forget(GpuTexture texture) {
         DIRTY.remove(texture);
         Entry entry = ENTRIES.remove(texture);
-        if (entry != null && entry.metadata != 0) GlStateManager._deleteTexture(entry.metadata);
+        if (entry != null) entry.close();
     }
 
-    public static String stats() { return "entityMeta=" + ENTRIES.size() + " builds=" + builds; }
     static long buildCount() { return builds; }
 }

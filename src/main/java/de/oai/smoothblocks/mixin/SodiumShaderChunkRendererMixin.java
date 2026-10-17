@@ -6,15 +6,11 @@ import de.oai.smoothblocks.SmoothBlocksXbrzGpuBridge;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * Vanilla/Sodium path without an Iris shaderpack: Sodium passes the terrain
- * sampler into ShaderChunkRenderer.begin(), which then reaches the default
- * Sodium chunk shader interface.
- */
+/** Set terrain filtering before Sodium setup; bind metadata after begin and restore the borrowed unit at end. */
 @Pseudo
 @Mixin(targets = "net.caffeinemc.mods.sodium.client.render.chunk.ShaderChunkRenderer")
 public abstract class SodiumShaderChunkRendererMixin {

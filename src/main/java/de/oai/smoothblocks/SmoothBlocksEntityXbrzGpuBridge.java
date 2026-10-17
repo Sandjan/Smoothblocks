@@ -1,9 +1,9 @@
 package de.oai.smoothblocks;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL20C;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Map;
 
 /** Configures the common reconstruction kernel for the actual world/GUI draw. */
 public final class SmoothBlocksEntityXbrzGpuBridge {
@@ -13,9 +13,11 @@ public final class SmoothBlocksEntityXbrzGpuBridge {
     private static final Map<Integer, Uniforms> PROGRAMS = new ConcurrentHashMap<>();
     private static final SmoothBlocksMetadataBinding BINDING = new SmoothBlocksMetadataBinding();
 
+    // Shader compilation can invalidate locations without touching render-thread GL state.
     public static void clearProgramCache() { PROGRAMS.clear(); }
     public static void release() { BINDING.release(); }
 
+    /** Uses this draw's source and world scope; a valid integer metadata sampler is required even in GUI mode. */
     public static void configureActiveEntityProgram(SmoothBlocksDrawState pass) {
         release();
         int program = GL11C.glGetInteger(GL20C.GL_CURRENT_PROGRAM);
@@ -26,8 +28,7 @@ public final class SmoothBlocksEntityXbrzGpuBridge {
                 && SmoothBlocksClient.isWorldEntityPipeline(pass.smoothblocks$pipeline());
         var source = pass.smoothblocks$diffuse();
         int metadata = world ? SmoothBlocksTextureMetadata.textureId(source) : 0;
-        int mode = world ? SmoothBlocksClient.getShaderModeCode() : 0;
-        if (mode == 2 && metadata == 0) mode = 0;
+        int mode = world && metadata != 0 ? SmoothBlocksClient.SHADER_MODE_XBRZ : SmoothBlocksClient.SHADER_MODE_NEAREST;
         // GLSL still validates sampler types when mode=0. Never alias the integer
         // metadata sampler with Sampler0, including GUI draws using the same program.
         int unit = BINDING.bind(program, u.samplers,
@@ -37,8 +38,7 @@ public final class SmoothBlocksEntityXbrzGpuBridge {
         }
         GL20C.glUniform1i(u.metadata, unit);
         GL20C.glUniform1i(u.mode, mode);
-        if (u.debug >= 0) GL20C.glUniform1i(u.debug, world ? SmoothBlocksClient.getDebugViewCode() : 0);
-        if (world) SmoothBlocksClient.noteEntityXbrzProgramSetup(mode);
+        if (u.debug >= 0) GL20C.glUniform1i(u.debug, 0);
     }
 
     private static Uniforms inspect(int program) {

@@ -22,6 +22,7 @@ import static de.oai.smoothblocks.RegressionHarness.require;
 /** Driver compilation + offscreen pixel checks; no visible window and no game launch. */
 public final class GpuRegressionHarness {
     private static final int SIZE = 64;
+    // Oversized triangle covers the viewport without a shared diagonal or vertex-buffer setup.
     private static final String VERTEX = """
             #version 330 core
             out vec2 uv;
@@ -66,6 +67,7 @@ public final class GpuRegressionHarness {
             int irisEntity = program(SmoothBlocksShaderPatch.finishIrisEntityFragment(
                     SmoothBlocksShaderPatch.markIrisEntitySamples("gbuffers_entities", FRAGMENT)));
             int terrain = program(SmoothBlocksShaderPatch.patchIrisTerrainFragmentPostTransform(FRAGMENT));
+            int sodium = program(SmoothBlocksShaderPatch.patchSodiumFragment(sodiumFragment()));
             int[] pixels = new int[64];
             for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
                 pixels[y * 8 + x] = x > y ? 0xFFFFAA33 : 0;
@@ -83,8 +85,10 @@ public final class GpuRegressionHarness {
             require(!Arrays.equals(world, baseline), "World must actually interpolate diagonal");
             require(Arrays.equals(world, draw(irisEntity, source, meta, "Entity", 2)), "Iris and vanilla reconstruction parity");
             require(Arrays.equals(world, draw(terrain, source, meta, "", 2)), "Terrain/entity common p1 parity");
+            require(Arrays.equals(world, draw(sodium, source, meta, "", 2)), "Sodium RGSS wrapper shares reconstruction");
             animatedFrames(entity, source, pixels, world);
             periodicBlock();
+            longAnimationPreparation();
             checkDrawPolicy(entity, texture, world, baseline);
             int itemProgram = program(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/item", FRAGMENT));
             byte[] item = draw(itemProgram, source, meta, "Entity", 2);
@@ -112,6 +116,8 @@ public final class GpuRegressionHarness {
             SmoothBlocksTextureMetadata.forget(texture);
             require(SmoothBlocksTextureMetadata.textureId(texture) == 0, "Disposed metadata must not survive");
             boundaryAndBinding(entity);
+            transferState();
+            alphaEdgeRepair();
             SmoothBlocksTextureMetadata.close();
             require(glGetError() == GL_NO_ERROR, "OpenGL error");
             System.out.println("PASS GPU: " + glGetString(GL_RENDERER)
@@ -122,6 +128,7 @@ public final class GpuRegressionHarness {
         }
     }
 
+    /** Exercise the actual bridge with identical shader/source across world and GUI scopes. */
     private static void checkDrawPolicy(int program, TestTexture texture, byte[] world, byte[] baseline) {
         RenderPipeline pipeline = RenderPipeline.builder().withLocation("smoothblocks/entity_test")
                 .withVertexShader("core/entity").withFragmentShader("core/entity")
@@ -160,6 +167,7 @@ public final class GpuRegressionHarness {
         SmoothBlocksRenderScope.endWorld();
     }
 
+    /** Adjacent solid-color sprites expose bleed; prebound scratch state exposes binding leaks. */
     private static void boundaryAndBinding(int entity) {
         int[] atlas = new int[32];
         short[] packed = new short[32];
@@ -216,6 +224,7 @@ public final class GpuRegressionHarness {
         return readDraw();
     }
 
+    /** Reads raw framebuffer RGBA bytes; comparisons retain OpenGL's row order on both sides. */
     private static byte[] readDraw() {
         glDrawArrays(GL_TRIANGLES, 0, 3);
         ByteBuffer bytes = BufferUtils.createByteBuffer(SIZE * SIZE * 4);
@@ -225,6 +234,7 @@ public final class GpuRegressionHarness {
         return output;
     }
 
+    /** Compare descriptor indirection with direct frame maps, then switch frames using only the four-byte address. */
     private static void animatedFrames(int program, int source, int[] first, byte[] expected) {
         var id = net.minecraft.resources.Identifier.withDefaultNamespace("block/test_animation");
         var image = new com.mojang.blaze3d.platform.NativeImage(8, 16, true);
@@ -273,6 +283,7 @@ public final class GpuRegressionHarness {
         }
     }
 
+    /** Use the center of a 3x3 tiled image as an independent wrap reference; a magenta atlas neighbor exposes bleed. */
     private static void periodicBlock() {
         int[] tile = new int[64], atlas = new int[128], repeated = new int[24 * 24];
         Arrays.fill(atlas, 0xFFFF00FF);
@@ -315,6 +326,145 @@ public final class GpuRegressionHarness {
             glDeleteTextures(meta); glDeleteTextures(refMeta); glDeleteTextures(source); glDeleteTextures(refSource);
             glDeleteProgram(shader); glDeleteProgram(refShader); SmoothBlocksAnimatedMetadata.clear();
         }
+    }
+
+    /** Long frame durations must retain exact quantized results without allocating one address per tick. */
+    private static void longAnimationPreparation() {
+        int duration = 1_000_000_000;
+        var id = net.minecraft.resources.Identifier.withDefaultNamespace("block/long_animation");
+        var image = new com.mojang.blaze3d.platform.NativeImage(2, 4, true);
+        int[] first = {0xFFFFFFFF, 0, 0xFF224488, 0x80FF0000};
+        int[] second = {0, 0xFFAA7733, 0xFFFFFFFF, 0xFF00FF00};
+        for (int i = 0; i < first.length; i++) {
+            image.setPixel(i % 2, i / 2, first[i]);
+            image.setPixel(i % 2, i / 2 + 2, second[i]);
+        }
+        var animation = new net.minecraft.client.resources.metadata.animation.AnimationMetadataSection(
+                java.util.Optional.empty(), java.util.Optional.empty(), java.util.Optional.empty(), duration, true);
+        try (var contents = new net.minecraft.client.renderer.texture.SpriteContents(id,
+                new net.minecraft.client.resources.metadata.animation.FrameSize(2, 2), image,
+                java.util.Optional.of(animation), java.util.List.of(), java.util.Optional.empty())) {
+            class Sprite extends net.minecraft.client.renderer.texture.TextureAtlasSprite {
+                Sprite() { super(id, contents, 2, 2, 0, 0, 0); }
+            }
+            var sprite = new Sprite();
+            var preparations = new net.minecraft.client.renderer.texture.SpriteLoader.Preparations(
+                    2, 2, 0, sprite, java.util.Map.of(id, sprite), java.util.concurrent.CompletableFuture.completedFuture(null));
+            short[] maps = SmoothBlocksAnimatedMetadata.prepare(preparations);
+            require(maps.length <= 6 + 2 * 1001 * 4, "Long animations use bounded quantized storage");
+            int initialAddress = SmoothBlocksAnimatedMetadata.frameAddress(sprite, 0, 0);
+            for (int tick : new int[]{0, duration / 7, duration / 2, duration - 1}) {
+                int weight = (int) ((float) tick / duration * 1000f);
+                int[] blended = new int[first.length];
+                for (int pixel = 0; pixel < blended.length; pixel++) {
+                    for (int shift = 0; shift < 32; shift += 8) {
+                        float value = ((first[pixel] >>> shift) & 255) * (1f - weight / 1000f)
+                                + ((second[pixel] >>> shift) & 255) * (weight / 1000f);
+                        blended[pixel] |= Math.round(value) << shift;
+                    }
+                }
+                short[] expected = SmoothBlocksXbrzCore.classifyArgb(2, 2, blended).metadata();
+                int address = SmoothBlocksAnimatedMetadata.frameAddress(sprite, 0, tick);
+                require(Arrays.equals(expected, Arrays.copyOfRange(maps, address, address + 4)), "Quantized tick result");
+            }
+            try {
+                SmoothBlocksAnimatedMetadata.build(preparations, null, 5);
+                throw new AssertionError("Descriptor capacity must be checked before frame preparation");
+            } catch (IllegalArgumentException expected) {
+                require(initialAddress == SmoothBlocksAnimatedMetadata.frameAddress(sprite, 0, 0),
+                        "Failed preparation must retain the active CPU generation");
+            }
+        } finally {
+            SmoothBlocksAnimatedMetadata.clear();
+        }
+    }
+
+    /** Deliberately inherited pixel-store/PBO state must survive success, split pointer writes and failure. */
+    private static void transferState() {
+        int[] pixels = {0xFF112233, 0x80445566, 0, 0xFFFFFFFF};
+        int source = upload(pixels, 2, 2);
+        int pack = glGenBuffers(), unpack = glGenBuffers();
+        int metadata = 0;
+        int activeUnit = glGetInteger(GL_ACTIVE_TEXTURE);
+        int packAlignment = glGetInteger(GL_PACK_ALIGNMENT);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pack);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack);
+        glPixelStorei(GL_PACK_ROW_LENGTH, 13);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, 2);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 17);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 3);
+        try {
+            var captured = SmoothBlocksXbrzMetadata.captureLevel0(new TestTexture(source, 2, 2));
+            require(Arrays.equals(pixels, captured.argb()), "Readback ignores inherited pack/PBO state");
+            metadata = SmoothBlocksXbrzMetadata.uploadMetadata(3, 3, new short[9]);
+            ByteBuffer address = BufferUtils.createByteBuffer(4);
+            address.put(0, (byte) 0x78).put(1, (byte) 0x56).put(2, (byte) 0x34).put(3, (byte) 0x12);
+            SmoothBlocksXbrzMetadata.updatePointer(metadata, 2, 3, 1, address);
+            try {
+                SmoothBlocksXbrzMetadata.uploadMetadata(1, 1, (ByteBuffer) null);
+                throw new AssertionError("Expected upload failure");
+            } catch (NullPointerException expected) {
+                // Failure occurs after temporary binding, exercising restoration and owned-texture cleanup.
+            }
+            require(glGetInteger(GL_ACTIVE_TEXTURE) == activeUnit, "Transfer active unit restoration");
+            require(glGetInteger(GL_PIXEL_PACK_BUFFER_BINDING) == pack, "Pack buffer restoration");
+            require(glGetInteger(GL_PIXEL_UNPACK_BUFFER_BINDING) == unpack, "Unpack buffer restoration");
+            require(glGetInteger(GL_PACK_ROW_LENGTH) == 13 && glGetInteger(GL_PACK_SKIP_PIXELS) == 2, "Pack layout restoration");
+            require(glGetInteger(GL_UNPACK_ROW_LENGTH) == 17 && glGetInteger(GL_UNPACK_SKIP_PIXELS) == 3, "Unpack layout restoration");
+
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+            glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+            ByteBuffer actual = BufferUtils.createByteBuffer(18);
+            org.lwjgl.opengl.GL45C.glGetTextureImage(metadata, 0, GL_RG_INTEGER, GL_UNSIGNED_BYTE, actual);
+            require((actual.get(10) & 255) == 0x78 && (actual.get(11) & 255) == 0x56
+                    && (actual.get(12) & 255) == 0x34 && (actual.get(13) & 255) == 0x12,
+                    "Address cells crossing a row preserve low/high byte order");
+        } finally {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+            glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, packAlignment);
+            glDeleteBuffers(pack);
+            glDeleteBuffers(unpack);
+            if (metadata != 0) glDeleteTextures(metadata);
+            glDeleteTextures(source);
+        }
+    }
+
+    private static void alphaEdgeRepair() {
+        var image = new com.mojang.blaze3d.platform.NativeImage(3, 3, true);
+        image.setPixel(0, 0, 0x80FF0000);
+        image.setPixel(2, 0, 0x8000FF00);
+        int[] before = SmoothBlocksPixels.read(image, 0, 0, 3, 3);
+        try (var contents = new net.minecraft.client.renderer.texture.TextureContents(image, null)) {
+            require(SmoothBlocksAlphaEdgeRepair.repair(contents) > 0, "Transparent edge pixels repaired");
+            for (int i = 0; i < before.length; i++) {
+                int actual = image.getPixel(i % 3, i / 3);
+                require((before[i] >>> 24) == (actual >>> 24), "Repair preserves all alpha values");
+                if ((before[i] >>> 24) != 0) require(before[i] == actual, "Visible pixels stay unchanged");
+            }
+            require(image.getPixel(1, 1) == 0x00FF0000, "Equal-alpha neighbors preserve scan-order tie break");
+            require(image.getPixel(1, 2) == 0, "Repaired colors do not propagate beyond original neighbors");
+        }
+    }
+
+    private static String sodiumFragment() {
+        String helpers = """
+                vec4 sampleNearest(sampler2D source, vec2 uv, vec2 pixelSize, vec2 du, vec2 dv, vec2 size) {
+                    return textureGrad(source, uv, du, dv);
+                }
+                vec4 sampleRGSS(sampler2D source, vec2 uv, vec2 pixelSize) {
+                    return mix(sampleNearest(source, uv, pixelSize, dFdx(uv), dFdy(uv), vec2(1.0)),
+                               textureLod(source, uv, 0.0), 0.5);
+                }
+                """;
+        return FRAGMENT.replace("void main()", helpers + "void main()")
+                .replace("texture(Sampler0, uv)", "sampleRGSS(Sampler0, uv, 1.0 / vec2(textureSize(Sampler0, 0)))");
     }
 
     private static int upload(int[] pixels, int width, int height) {

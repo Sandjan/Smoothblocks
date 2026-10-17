@@ -54,6 +54,7 @@ sourceSets {
 
 def validationMains = [
     patchRegression: 'PatchHarness',
+    refactoringRegression: 'de.oai.smoothblocks.RefactoringHarness',
     atlasRegression: 'de.oai.smoothblocks.AtlasMappingHarness',
     integrationRegression: 'de.oai.smoothblocks.RegressionHarness'
 ]

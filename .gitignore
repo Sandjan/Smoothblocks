@@ -23,3 +23,7 @@ local.properties
 .codex/
 .agents/
 .aws/
+
+
+.RELEASE-CHECKLIST.md
+.VALIDATION.md

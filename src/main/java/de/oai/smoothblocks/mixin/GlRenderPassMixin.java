@@ -1,9 +1,9 @@
 package de.oai.smoothblocks.mixin;
 
 import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
-import com.mojang.blaze3d.textures.GpuSampler;
 import de.oai.smoothblocks.SmoothBlocksDrawState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -11,6 +11,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+/** Captures pipeline and Sampler0 per backend pass so deferred draws cannot use another pass's last binding. */
 @Mixin(targets = "com.mojang.blaze3d.opengl.GlRenderPass")
 public abstract class GlRenderPassMixin implements SmoothBlocksDrawState {
     @Unique private RenderPipeline smoothblocks$pipeline;

@@ -6,16 +6,18 @@ SmoothBlocks separates resource-time edge classification (P0) from fragment reco
 
 The block atlas is captured at GPU mip level 0 after upload. Sprites are classified independently. RG8UI metadata packs four three-bit corner states and four boundary bits. `0xFFFE` marks missing/padding data; `0xFFFF` retains linear filtering for animated effects. The unused corner state 7 addresses a descriptor stored below the atlas metadata.
 
-Each descriptor contains sprite origin, width/wrap flag, height and a 32-bit metadata address. Opaque block sprites use periodic classification and sprite-local wrapping. Static interior texels retain direct metadata; only their borders resolve a descriptor. Transparent block sprites and other texture classes retain hard boundaries.
+Each descriptor contains sprite origin, width/wrap flag, height and a 32-bit metadata address. Eligible opaque block sprites use periodic classification and sprite-local wrapping. Static interior texels retain direct metadata; only their borders resolve a descriptor. Transparent block sprites and other texture classes retain hard boundaries.
 
-Animated blocks precompute their distinct frames and Minecraft's quantized temporal intermediate steps at resource load. Identical metadata shares storage. Rendering selects the active frame by updating two RG8UI address texels (four bytes), without copying or classifying frame metadata. Water, lava, nether portal and fire retain the linear path. GPU texture-size limits still apply.
+Animated blocks precompute their distinct frames and Minecraft's quantized temporal intermediate steps at resource load. Identical metadata shares storage. Rendering selects the active frame by updating two RG8UI address texels (four bytes), without copying or classifying frame metadata. Long frame durations share a bounded table of quantized interpolation weights. Preparation enforces GPU capacity while retaining maps and publishes CPU/GPU generations together after upload; failures invalidate both. Water, lava, nether portal and fire retain the linear path.
 
-Other world texture metadata is cached by texture identity. Supported standalone uploads invalidate the cache and are coalesced before world rendering. Draws only look up prepared data. Closing textures or reloading resources disposes the associated metadata and caches.
+Other world texture metadata is cached by texture identity. Supported standalone uploads invalidate the cache and are coalesced before world rendering. Draws only look up prepared data. Closing source textures disposes their cached metadata. Block-atlas rebuilds replace the active generation and invalidate cached program locations.
 
 ## Rendering integration
 
-Vanilla shader sources are patched in ShaderManager's compilation cache. Sodium terrain and Iris shader transformation hooks reuse the canonical P1 kernel. Metadata setup follows the full draw setup call, including Iris early returns, and restores temporary sampler/texture bindings afterward. Mip selection policy is unchanged.
+Vanilla shader sources are patched in ShaderManager's compilation cache. Sodium terrain and Iris shader transformation hooks reuse the canonical P1 kernel. Metadata setup follows the full draw setup call, including Iris early returns, and restores temporary sampler/texture bindings afterward, including exceptional draw exits. Shader-source scans mask comments and quoted strings without shifting replacement offsets. xBRZ reconstruction reads source level 0; shader fallback paths retain their original sampling calls.
 
 Generated-item sides are marked through the common QuadCollection builder around the side-bake call. This includes Sodium's replacement baker. Vanilla and Sodium/Fabric Renderer API item output omit only those marked side faces during world xBRZ rendering. Front/back, GUI and actual 3D models retain their geometry.
 
 The release has a fixed xBRZ policy and no keyboard hooks or in-game diagnostic controls. Internal shader uniforms and fallback paths remain available to the regression harnesses and error handling.
+
+Owned Iris/entity sampler variants share one disposal owner. Minecraft sampler-cache entries remain borrowed. The supported Minecraft image API is typed ARGB; private animation-field assumptions are isolated in one adapter.

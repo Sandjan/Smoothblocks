@@ -11,12 +11,13 @@ import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 
-/** Fabric Renderer API emits baked quads without VertexConsumer.putBakedQuad. */
+/** Sodium's Fabric Renderer API path bypasses putBakedQuad; suppress both quad import and its paired emit. */
 @Pseudo
 @Mixin(targets = {
         "net.caffeinemc.mods.sodium.client.render.frapi.render.ItemRenderContext",
         "net.caffeinemc.mods.sodium.client.render.frapi.render.ExtendedItemFeatureRenderer"})
 public abstract class SodiumItemRenderContextMixin {
+    // The shared flag belongs to this invocation and is reset for each imported quad.
     @Coerce
     @WrapOperation(method = {"bufferQuads", "prepareSubmit"}, remap = false, at = @At(value = "INVOKE",
             target = "Lnet/fabricmc/fabric/api/client/renderer/v1/mesh/QuadEmitter;fromBakedQuad(Lnet/minecraft/client/resources/model/geometry/BakedQuad;)Lnet/fabricmc/fabric/api/client/renderer/v1/mesh/QuadEmitter;"))

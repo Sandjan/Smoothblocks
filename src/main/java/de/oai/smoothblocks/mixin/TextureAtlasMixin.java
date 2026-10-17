@@ -1,9 +1,9 @@
 package de.oai.smoothblocks.mixin;
 
 import de.oai.smoothblocks.SmoothBlocksEntityXbrzGpuBridge;
+import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
 import de.oai.smoothblocks.SmoothBlocksXbrzGpuBridge;
 import de.oai.smoothblocks.SmoothBlocksXbrzMetadata;
-import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
 import net.minecraft.client.renderer.texture.SpriteLoader;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import org.spongepowered.asm.mixin.Mixin;
@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Builds the compact xBRZ edge metadata alongside Minecraft's block atlas. */
+/** Upload completion supplies authoritative GPU pixels; block metadata also serves block-textured entity draws. */
 @Mixin(TextureAtlas.class)
 public abstract class TextureAtlasMixin {
     @Inject(method = "upload", at = @At("TAIL"))
@@ -25,6 +25,7 @@ public abstract class TextureAtlasMixin {
             return;
         }
 
+        // Atlas replacement invalidates cached program metadata bindings on both rendering paths.
         SmoothBlocksXbrzMetadata.rebuild(self, preparations);
         SmoothBlocksXbrzGpuBridge.clearProgramCache();
         SmoothBlocksEntityXbrzGpuBridge.clearProgramCache();

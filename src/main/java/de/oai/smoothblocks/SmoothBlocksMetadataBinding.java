@@ -1,25 +1,22 @@
 package de.oai.smoothblocks;
 
+import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL13C;
 import org.lwjgl.opengl.GL20C;
 import org.lwjgl.opengl.GL33C;
-import java.nio.IntBuffer;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Arrays;
 
 /** Shared scoped metadata binding for terrain passes and entity draws. */
 final class SmoothBlocksMetadataBinding {
     private int activeMetadataUnit = -1;
     private int previousTexture2d;
     private int previousSampler;
-    private int expectedTexture;
-    private long metadataBindingDrifts;
     private boolean[] used;
-    long drifts() { return metadataBindingDrifts; }
-    void resetDiagnostics() { metadataBindingDrifts = 0; }
+    /** Includes every active sampler-array element except metadata, so unit selection also protects auxiliary maps. */
     static int[] findSamplerLocations(int program, int metaLocation) {
         int count = GL20C.glGetProgrami(program, GL20C.GL_ACTIVE_UNIFORMS);
         int maxName = Math.max(64, GL20C.glGetProgrami(program, GL20C.GL_ACTIVE_UNIFORM_MAX_LENGTH));
@@ -61,7 +58,7 @@ final class SmoothBlocksMetadataBinding {
         };
     }
 
-    /** Release our temporary terrain metadata binding after the chunk draw pass. */
+    /** Restores the saved texture and sampler on the borrowed unit; repeated release is harmless. */
     public void release() {
         int unit = activeMetadataUnit;
         if (unit < 0) return;
@@ -77,8 +74,6 @@ final class SmoothBlocksMetadataBinding {
             // Raw GL is intentional. Units >= 12 are outside Minecraft 26.1.2's
             // GlStateManager cache and must never be passed to _activeTexture().
             GL13C.glActiveTexture(GL13C.GL_TEXTURE0 + unit);
-            int stillBound = GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D);
-            if (stillBound != expectedTexture) metadataBindingDrifts++;
             GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, restoreTexture);
             GL33C.glBindSampler(unit, restoreSampler);
         } finally {
@@ -86,16 +81,7 @@ final class SmoothBlocksMetadataBinding {
         }
     }
 
-    /**
-     * Bind metadata on a texture unit that the current terrain shader does not use.
-     *
-     * <p>v1.5.5 only searched Minecraft's cached units 3..11 and required them to be
-     * globally empty. Iris leaves perfectly harmless bindings on those units, so that
-     * test produced an apparent mixed-path rate in earlier diagnostics. Here we instead inspect
-     * the sampler units actually referenced by the active program and prefer a raw GL
-     * unit >= 12. This is safe because the raw binding is fully restored after the pass
-     * and never enters GlStateManager's 12-slot cache.</p>
-     */
+    /** Borrows a unit unused by active shader samplers; returns -1 if unavailable. Caller must release after drawing. */
     public int bind(int program, int[] samplerLocations, int metaTexture) {
         release();
         if (metaTexture == 0) return -1;
@@ -115,22 +101,11 @@ final class SmoothBlocksMetadataBinding {
         }
 
         int chosen = -1;
-        // Prefer a unit that Minecraft's GlStateManager cannot represent. This avoids
-        // both the old "Texture N out of range" crash and any cache desynchronisation.
-        for (int unit = searchMax; unit >= 12; unit--) {
-            if (!used[unit]) {
-                chosen = unit;
-                break;
-            }
-        }
-        // Very old hardware fallback: use an actually-unused cached unit.
-        if (chosen < 0) {
-            for (int unit = Math.min(11, searchMax); unit >= 3; unit--) {
-                if (!used[unit]) {
-                    chosen = unit;
-                    break;
-                }
-            }
+        // Descending order prefers units outside Minecraft's 12-slot cache, then unused cached units.
+        for (int unit = searchMax; unit >= 3; unit--) {
+            if (used[unit]) continue;
+            chosen = unit;
+            break;
         }
         if (chosen < 0) return -1;
 
@@ -148,7 +123,6 @@ final class SmoothBlocksMetadataBinding {
             GL13C.glActiveTexture(previousActive);
         }
         activeMetadataUnit = chosen;
-        expectedTexture = metaTexture;
         return chosen;
     }
 }

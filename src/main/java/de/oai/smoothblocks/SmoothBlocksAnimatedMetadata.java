@@ -1,35 +1,31 @@
 package de.oai.smoothblocks;
 
-import com.mojang.blaze3d.platform.NativeImage;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
 import net.minecraft.client.renderer.texture.SpriteContents;
 import net.minecraft.client.renderer.texture.SpriteLoader;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import org.lwjgl.BufferUtils;
 
-import java.lang.reflect.Field;
-import java.nio.ByteBuffer;
-import java.util.*;
+import static de.oai.smoothblocks.SmoothBlocksMetadataFormat.*;
 
-/** Frame data is immutable on the GPU. Animation changes update only a four-byte address. */
+/** Frame maps stay immutable on the GPU; the render thread changes only their four-byte address. */
 public final class SmoothBlocksAnimatedMetadata {
-    private SmoothBlocksAnimatedMetadata() {}
-    private static final Map<SpriteContents, Entry> SPRITES = new IdentityHashMap<>();
-    private static final Map<Object, Entry> ANIMATIONS = new IdentityHashMap<>();
+    private static final int WEIGHT_SCALE = 1000;
+    private static final ByteBuffer POINTER = BufferUtils.createByteBuffer(Integer.BYTES);
     private static final Map<Object, Entry> STATES = new IdentityHashMap<>();
-    private static final ByteBuffer POINTER = BufferUtils.createByteBuffer(4);
-    private static Field stateAnimation;
-    private static int atlasWidth, atlasHeight;
-    private static long preparedBytes;
-    private static final class Entry {
-        final int slot;
-        final int[][] offsets;
-        int current;
-        SmoothBlocksXbrzCore.Result staticResult;
-        Entry(int slot, int[][] offsets) {
-            this.slot = slot; this.offsets = offsets; this.current = offsets[0][0];
-        }
-    }
+    private static Prepared active = Prepared.empty();
+
+    private SmoothBlocksAnimatedMetadata() {}
+
     private record FrameKey(int current, int next, int weight) {}
+
+    /** Keys own classifier output, which is never mutated after insertion. */
     private record MetadataKey(short[] values) {
         @Override public int hashCode() { return Arrays.hashCode(values); }
         @Override public boolean equals(Object other) {
@@ -37,10 +33,170 @@ public final class SmoothBlocksAnimatedMetadata {
         }
     }
 
-    public static void clear() { SPRITES.clear(); ANIMATIONS.clear(); STATES.clear(); preparedBytes = 0; }
-    static long preparedBytes() { return preparedBytes; }
+    private record FrameOffsets(int duration, int[] addresses) {
+        int at(int tick) {
+            if (addresses.length == 1) return addresses[0];
+            return addresses[duration > WEIGHT_SCALE ? weight(tick, duration) : tick];
+        }
+    }
 
-    /** Only block sprites; explicitly excluded effects keep the existing linear sentinel. */
+    private static final class Entry {
+        final int slot;
+        final List<FrameOffsets> frames;
+        SmoothBlocksXbrzCore.Result staticResult;
+        int current;
+
+        Entry(int slot, List<FrameOffsets> frames, SmoothBlocksXbrzCore.Result staticResult) {
+            this.slot = slot;
+            this.frames = frames;
+            this.staticResult = staticResult;
+            current = frames.getFirst().at(0);
+        }
+    }
+
+    /** Pending CPU generation; production publishes it only after its matching texture has uploaded. */
+    static final class Prepared {
+        private final int width;
+        private final int height;
+        private final short[] data;
+        private final Map<SpriteContents, Entry> sprites;
+        private final Map<Object, Entry> animations;
+
+        private Prepared(int width, int height, short[] data,
+                         Map<SpriteContents, Entry> sprites, Map<Object, Entry> animations) {
+            this.width = width;
+            this.height = height;
+            this.data = data;
+            this.sprites = sprites;
+            this.animations = animations;
+        }
+
+        static Prepared empty() {
+            return new Prepared(0, 0, new short[0], new IdentityHashMap<>(), new IdentityHashMap<>());
+        }
+
+        short[] data() { return data; }
+
+        int marker(TextureAtlasSprite sprite) {
+            Entry entry = sprites.get(sprite.contents());
+            return entry == null ? ANIMATED_LINEAR : SmoothBlocksMetadataFormat.marker(entry.slot);
+        }
+
+        SmoothBlocksXbrzCore.Result staticResult(TextureAtlasSprite sprite) {
+            Entry entry = sprites.get(sprite.contents());
+            return entry == null ? null : entry.staticResult;
+        }
+    }
+
+    /** Bounds metadata growth before retaining each map, including descriptor storage. */
+    private static final class Storage {
+        private final int limit;
+        private final int descriptorCells;
+        private final List<short[]> chunks = new ArrayList<>();
+        private int cursor;
+
+        Storage(int spriteCount, int limit) {
+            this.limit = limit;
+            descriptorCells = Math.multiplyExact(spriteCount, DESCRIPTOR_CELLS);
+            cursor = descriptorCells;
+            requireCapacity(0);
+        }
+
+        void requireCapacity(int cells) {
+            if ((long) cursor + cells > limit) {
+                throw new IllegalArgumentException("Block metadata exceeds GPU capacity");
+            }
+        }
+
+        int append(short[] metadata) {
+            requireCapacity(metadata.length);
+            int address = cursor;
+            cursor = Math.addExact(cursor, metadata.length);
+            chunks.add(metadata);
+            return address;
+        }
+
+        short[] finish(short[] descriptors) {
+            short[] data = Arrays.copyOf(descriptors, cursor);
+            int address = descriptorCells;
+            for (short[] chunk : chunks) {
+                System.arraycopy(chunk, 0, data, address, chunk.length);
+                address += chunk.length;
+            }
+            return data;
+        }
+    }
+
+    private static final class FrameBuilder {
+        private final TextureAtlasSprite sprite;
+        private final SmoothBlocksSpriteAccess.Animation animation;
+        private final Storage storage;
+        private final Map<Integer, int[]> pixels = new HashMap<>();
+        private final Map<FrameKey, Integer> combinations = new HashMap<>();
+        private final Map<MetadataKey, Integer> identical = new HashMap<>();
+
+        FrameBuilder(TextureAtlasSprite sprite, SmoothBlocksSpriteAccess.Animation animation, Storage storage) {
+            this.sprite = sprite;
+            this.animation = animation;
+            this.storage = storage;
+        }
+
+        List<FrameOffsets> build() {
+            List<FrameOffsets> frames = new ArrayList<>();
+            for (int index = 0; index < animation.frames().size(); index++) frames.add(buildFrame(index));
+            return List.copyOf(frames);
+        }
+
+        private FrameOffsets buildFrame(int frame) {
+            var current = animation.frames().get(frame);
+            int next = animation.frames().get((frame + 1) % animation.frames().size()).index();
+            int duration = current.duration();
+            if (duration <= 0) throw new IllegalArgumentException("Invalid animation duration");
+            int steps = animation.interpolate() ? Math.min(duration, WEIGHT_SCALE + 1) : 1;
+            int[] addresses = new int[steps];
+            for (int step = 0; step < steps; step++) {
+                int blendWeight = !animation.interpolate() ? 0
+                        : duration > WEIGHT_SCALE ? step : weight(step, duration);
+                addresses[step] = address(current.index(), next, blendWeight);
+            }
+            return new FrameOffsets(duration, addresses);
+        }
+
+        private int address(int current, int next, int blendWeight) {
+            FrameKey key = new FrameKey(current, blendWeight == 0 ? current : next, blendWeight);
+            Integer cached = combinations.get(key);
+            if (cached != null) return cached;
+            int[] source = framePixels(current);
+            if (blendWeight != 0) source = blend(source, framePixels(next), blendWeight);
+            var contents = sprite.contents();
+            short[] metadata = SmoothBlocksXbrzCore.classifyArgb(
+                    contents.width(), contents.height(), source, periodic(sprite)).metadata();
+            // Deduplication is per sprite, matching the original address and storage contract.
+            MetadataKey signature = new MetadataKey(metadata);
+            Integer address = identical.get(signature);
+            if (address == null) {
+                address = storage.append(metadata);
+                identical.put(signature, address);
+            }
+            combinations.put(key, address);
+            return address;
+        }
+
+        private int[] framePixels(int index) {
+            return pixels.computeIfAbsent(index, frame -> {
+                var contents = sprite.contents();
+                int width = contents.width(), height = contents.height();
+                return SmoothBlocksPixels.read(SmoothBlocksSpriteAccess.image(contents),
+                        frame % animation.columns() * width, frame / animation.columns() * height, width, height);
+            });
+        }
+    }
+
+    public static void clear() {
+        active = Prepared.empty();
+        STATES.clear();
+    }
+
     static boolean eligible(TextureAtlasSprite sprite) {
         return sprite.contents().isAnimated() && blockSprite(sprite);
     }
@@ -53,156 +209,139 @@ public final class SmoothBlocksAnimatedMetadata {
                 && !path.matches("block/(soul_)?(fire_[01]|campfire_fire)");
     }
 
+    /** Transparent sprites and excluded effects retain isolated boundaries. */
     static boolean periodic(TextureAtlasSprite sprite) {
         return blockSprite(sprite) && sprite.transparency().isOpaque();
     }
 
+    /** Harness convenience; production uses build/publish around GPU upload. */
     static short[] prepare(SpriteLoader.Preparations preparations) {
         return prepare(preparations, null);
     }
 
     static short[] prepare(SpriteLoader.Preparations preparations, int[] atlasPixels) {
-        clear(); atlasWidth = preparations.width(); atlasHeight = preparations.height();
+        Prepared prepared = build(preparations, atlasPixels, Integer.MAX_VALUE);
+        publish(prepared);
+        return prepared.data;
+    }
+
+    static Prepared build(SpriteLoader.Preparations preparations, int[] atlasPixels, int maxCells) {
         var sprites = preparations.regions().values().stream().filter(s -> eligible(s) || periodic(s)).toList();
-        if (sprites.size() >= 8191) throw new IllegalArgumentException("Too many animated block sprites");
-        int cursor = Math.multiplyExact(sprites.size(), 6);
-        var chunks = new ArrayList<short[]>();
-        var descriptors = new short[cursor];
-        for (var sprite : sprites) {
-            try {
-                var contents = sprite.contents();
-                int w = contents.width(), h = contents.height();
-                boolean wrap = periodic(sprite);
-                SmoothBlocksXbrzCore.Result staticResult = null;
-                Object animation = field(contents, "animatedTexture");
-                int[][] offsets;
-                if (!contents.isAnimated()) {
-                    int ox = Math.round(sprite.getU0() * atlasWidth), oy = Math.round(sprite.getV0() * atlasHeight);
-                    int[] source = new int[w * h];
-                    if (atlasPixels != null) {
-                        for (int y = 0; y < h; y++) System.arraycopy(atlasPixels, (oy + y) * atlasWidth + ox, source, y * w, w);
-                    } else source = read((NativeImage) field(contents, "originalImage"), 0, 1, w, h);
-                    staticResult = SmoothBlocksXbrzCore.classifyArgb(w, h, source, true);
-                    offsets = new int[][]{{cursor}};
-                    chunks.add(staticResult.metadata()); cursor = Math.addExact(cursor, w * h);
-                } else {
-                    var frames = (List<?>) field(animation, "frames");
-                    int columns = (int) field(animation, "frameRowSize");
-                    boolean interpolate = (boolean) field(animation, "interpolateFrames");
-                    NativeImage image = (NativeImage) field(contents, "originalImage");
-                    var pixels = new HashMap<Integer, int[]>();
-                    var dedup = new HashMap<FrameKey, Integer>();
-                    var identical = new HashMap<MetadataKey, Integer>();
-                    offsets = new int[frames.size()][];
-                    for (int f = 0; f < frames.size(); f++) {
-                        int index = (int) field(frames.get(f), "index");
-                        int next = (int) field(frames.get((f + 1) % frames.size()), "index");
-                        int time = (int) field(frames.get(f), "time");
-                        offsets[f] = new int[interpolate ? time : 1];
-                        for (int t = 0; t < offsets[f].length; t++) {
-                            // Matches Minecraft's quantized SpriteAnimationInfo draw index.
-                            int weight = interpolate ? (int) ((float) t / time * 1000f) : 0;
-                            var key = new FrameKey(index, weight == 0 ? index : next, weight);
-                            Integer offset = dedup.get(key);
-                            if (offset == null) {
-                                int[] a = pixels.computeIfAbsent(index, i -> read(image, i, columns, w, h));
-                                int[] source = a;
-                                if (weight != 0) {
-                                    int[] b = pixels.computeIfAbsent(next, i -> read(image, i, columns, w, h));
-                                    source = blend(a, b, weight);
-                                }
-                                short[] meta = SmoothBlocksXbrzCore.classifyArgb(w, h, source, wrap).metadata();
-                                var signature = new MetadataKey(meta);
-                                offset = identical.get(signature);
-                                if (offset == null) {
-                                    offset = cursor; cursor = Math.addExact(cursor, meta.length);
-                                    chunks.add(meta); identical.put(signature, offset);
-                                }
-                                dedup.put(key, offset);
-                            }
-                            offsets[f][t] = offset;
-                        }
-                    }
-                    }
-                int slot = SPRITES.size(), d = slot * 6;
-                descriptors[d] = (short) Math.round(sprite.getU0() * atlasWidth);
-                descriptors[d + 1] = (short) Math.round(sprite.getV0() * atlasHeight);
-                descriptors[d + 2] = (short) (w | (wrap ? 0x8000 : 0));
-                descriptors[d + 3] = (short) h;
-                descriptors[d + 4] = (short) offsets[0][0];
-                descriptors[d + 5] = (short) (offsets[0][0] >>> 16);
-                var entry = new Entry(slot, offsets);
-                entry.staticResult = staticResult;
-                SPRITES.put(contents, entry);
-                if (animation != null) ANIMATIONS.put(animation, entry);
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("Cannot prepare animated block " + sprite.contents().name(), e);
-            }
+        if (sprites.size() > MAX_SPRITES) throw new IllegalArgumentException("Too many block sprites");
+        return new Builder(preparations.width(), preparations.height(), atlasPixels, sprites.size(), maxCells).build(sprites);
+    }
+
+    /** One resource-load transaction owns all temporary addresses, maps and descriptor writes. */
+    private static final class Builder {
+        private final int width;
+        private final int height;
+        private final int[] pixels;
+        private final Storage storage;
+        private final short[] descriptors;
+        private final Map<SpriteContents, Entry> entries = new IdentityHashMap<>();
+        private final Map<Object, Entry> animations = new IdentityHashMap<>();
+
+        Builder(int width, int height, int[] pixels, int spriteCount, int maxCells) {
+            this.width = width;
+            this.height = height;
+            this.pixels = pixels;
+            storage = new Storage(spriteCount, maxCells);
+            descriptors = new short[Math.multiplyExact(spriteCount, DESCRIPTOR_CELLS)];
         }
-        short[] extra = new short[cursor];
-        System.arraycopy(descriptors, 0, extra, 0, descriptors.length);
-        cursor = descriptors.length;
-        for (short[] chunk : chunks) { System.arraycopy(chunk, 0, extra, cursor, chunk.length); cursor += chunk.length; }
-        preparedBytes = (long) extra.length * 2;
-        return extra;
+
+        Prepared build(List<TextureAtlasSprite> sprites) {
+            for (TextureAtlasSprite sprite : sprites) addSprite(sprite);
+            return new Prepared(width, height, storage.finish(descriptors), entries, animations);
+        }
+
+        private void addSprite(TextureAtlasSprite sprite) {
+            var contents = sprite.contents();
+            int spriteWidth = contents.width(), spriteHeight = contents.height();
+            if (spriteWidth <= 0 || spriteWidth > WIDTH_MASK || spriteHeight <= 0 || spriteHeight > 0xFFFF) {
+                throw new IllegalArgumentException("Sprite dimensions exceed descriptor format");
+            }
+            Entry entry = contents.isAnimated() ? animatedEntry(sprite) : staticEntry(sprite);
+            entries.put(contents, entry);
+            writeDescriptor(sprite, entry);
+        }
+
+        private Entry animatedEntry(TextureAtlasSprite sprite) {
+            var animation = SmoothBlocksSpriteAccess.animation(sprite.contents());
+            if (animation.frames().isEmpty()) throw new IllegalArgumentException("Empty block animation");
+            Entry entry = new Entry(entries.size(), new FrameBuilder(sprite, animation, storage).build(), null);
+            animations.put(animation.identity(), entry);
+            return entry;
+        }
+
+        private Entry staticEntry(TextureAtlasSprite sprite) {
+            var contents = sprite.contents();
+            int spriteWidth = contents.width(), spriteHeight = contents.height();
+            storage.requireCapacity(Math.multiplyExact(spriteWidth, spriteHeight));
+            int x = Math.round(sprite.getU0() * width), y = Math.round(sprite.getV0() * height);
+            int[] source = pixels == null
+                    ? SmoothBlocksPixels.read(SmoothBlocksSpriteAccess.image(contents), 0, 0, spriteWidth, spriteHeight)
+                    : SmoothBlocksPixels.crop(pixels, width, x, y, spriteWidth, spriteHeight);
+            var classified = SmoothBlocksXbrzCore.classifyArgb(spriteWidth, spriteHeight, source, true);
+            var frame = new FrameOffsets(1, new int[]{storage.append(classified.metadata())});
+            return new Entry(entries.size(), List.of(frame), classified);
+        }
+
+        private void writeDescriptor(TextureAtlasSprite sprite, Entry entry) {
+            int base = entry.slot * DESCRIPTOR_CELLS;
+            descriptors[base] = (short) Math.round(sprite.getU0() * width);
+            descriptors[base + 1] = (short) Math.round(sprite.getV0() * height);
+            descriptors[base + 2] = (short) (sprite.contents().width() | (periodic(sprite) ? WRAP_FLAG : 0));
+            descriptors[base + 3] = (short) sprite.contents().height();
+            descriptors[base + ADDRESS_CELL] = (short) entry.current;
+            descriptors[base + ADDRESS_CELL + 1] = (short) (entry.current >>> 16);
+        }
     }
 
-    static int marker(TextureAtlasSprite sprite) {
-        Entry entry = SPRITES.get(sprite.contents());
-        return entry == null ? 0xFFFF : (entry.slot << 3) | 7; // xBRZ corner states only use 0..5.
+    static void publish(Prepared prepared) {
+        prepared.sprites.values().forEach(entry -> entry.staticResult = null);
+        active = new Prepared(prepared.width, prepared.height, new short[0], prepared.sprites, prepared.animations);
+        STATES.clear();
     }
 
-    static SmoothBlocksXbrzCore.Result takeStaticResult(TextureAtlasSprite sprite) {
-        Entry entry = SPRITES.get(sprite.contents());
-        if (entry == null) return null;
-        var result = entry.staticResult; entry.staticResult = null; return result;
+    static int marker(TextureAtlasSprite sprite) { return active.marker(sprite); }
+
+    static int frameAddress(TextureAtlasSprite sprite, int frame, int tick) {
+        return active.sprites.get(sprite.contents()).frames.get(frame).at(tick);
     }
 
-    static int frameAddress(TextureAtlasSprite sprite, int frame, int subFrame) {
-        return SPRITES.get(sprite.contents()).offsets[frame][subFrame];
-    }
-
-    public static void update(Object state, int frame, int subFrame) {
+    /** Runs after Minecraft uploads the corresponding frame; null entries cache excluded animations too. */
+    public static void update(Object state, int frame, int tick) {
         if (!STATES.containsKey(state)) {
-            try {
-                if (stateAnimation == null) {
-                    stateAnimation = state.getClass().getDeclaredField("animationInfo");
-                    stateAnimation.setAccessible(true);
-                }
-                STATES.put(state, ANIMATIONS.get(stateAnimation.get(state)));
-            } catch (ReflectiveOperationException e) { throw new IllegalStateException(e); }
+            STATES.put(state, active.animations.get(SmoothBlocksSpriteAccess.animationInfo(state)));
         }
         Entry entry = STATES.get(state);
         if (entry == null) return;
-        int[] offsets = entry.offsets[frame];
-        int offset = offsets[offsets.length == 1 ? 0 : subFrame];
-        if (offset == entry.current) return;
-        POINTER.put(0, (byte) offset).put(1, (byte) (offset >>> 8))
-                .put(2, (byte) (offset >>> 16)).put(3, (byte) (offset >>> 24));
-        int cell = entry.slot * 6 + 4;
-        // The two address texels may straddle a row; update separately in that case.
-        SmoothBlocksXbrzMetadata.updatePointer(cell, atlasWidth, atlasHeight, POINTER);
-        entry.current = offset;
+        int address = entry.frames.get(frame).at(tick);
+        if (address == entry.current) return;
+        POINTER.put(0, (byte) address).put(1, (byte) (address >>> 8))
+                .put(2, (byte) (address >>> 16)).put(3, (byte) (address >>> 24));
+        SmoothBlocksXbrzMetadata.updatePointer(
+                entry.slot * DESCRIPTOR_CELLS + ADDRESS_CELL, active.width, active.height, POINTER);
+        entry.current = address;
     }
 
-    private static Object field(Object owner, String name) throws ReflectiveOperationException {
-        Field f = owner.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(owner);
+    private static int weight(int tick, int duration) {
+        return (int) ((float) tick / duration * WEIGHT_SCALE);
     }
-    private static int[] read(NativeImage image, int frame, int columns, int w, int h) {
-        int[] pixels = new int[w * h]; int ox = frame % columns * w, oy = frame / columns * h;
-        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) pixels[y * w + x] = image.getPixel(ox + x, oy + y);
-        return pixels;
-    }
+
+    /** Matches Minecraft's quantized interpolation and rounded ARGB channels. */
     private static int[] blend(int[] a, int[] b, int weight) {
-        int[] out = new int[a.length];
-        for (int i = 0; i < out.length; i++) {
+        int[] output = new int[a.length];
+        float fraction = weight / (float) WEIGHT_SCALE;
+        for (int i = 0; i < output.length; i++) {
             int pixel = 0;
-            for (int shift = 0; shift < 32; shift += 8) {
-                float v = ((a[i] >>> shift) & 255) * (1f - weight / 1000f) + ((b[i] >>> shift) & 255) * (weight / 1000f);
-                pixel |= Math.round(v) << shift;
+            for (int shift = 0; shift < Integer.SIZE; shift += Byte.SIZE) {
+                float value = ((a[i] >>> shift) & 255) * (1f - fraction)
+                        + ((b[i] >>> shift) & 255) * fraction;
+                pixel |= Math.round(value) << shift;
             }
-            out[i] = pixel;
+            output[i] = pixel;
         }
-        return out;
+        return output;
     }
 }

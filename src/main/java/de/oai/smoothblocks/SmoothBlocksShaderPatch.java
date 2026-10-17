@@ -5,14 +5,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.concurrent.atomic.AtomicLong;
 
-/** Shader-source patches for direct terrain and entity xBRZ reconstruction. */
+/** Source rewriting stays separate from the shared GLSL reconstruction kernel. */
 public final class SmoothBlocksShaderPatch {
-    private SmoothBlocksShaderPatch() {}
-
     private static final String TERRAIN_MARKER = "SMOOTHBLOCKS_XBRZ_DIRECT_V13";
     private static final String TERRAIN_CALL = "smoothblocks_TerrainSample";
     private static final String TERRAIN_GRAD_CALL = "smoothblocks_TerrainSampleGrad";
@@ -20,431 +18,220 @@ public final class SmoothBlocksShaderPatch {
     private static final String ENTITY_MARKER = "SMOOTHBLOCKS_ENTITY_XBRZ_V9";
     private static final String ENTITY_CALL = "smoothblocks_EntitySample";
 
-    // Compile-time Iris coverage diagnostics. These are intentionally aggregate counters
-    // so F7 stays within one screenshot instead of dumping shader sources.
+    private static final List<String> DIFFUSE_NAMES = List.of(
+            "gtexture", "Sampler0", "u_BlockTex", "albedo", "diffuse", "diffuseTex", "texture", "tex");
+    private static final List<String> AUXILIARY_NAMES = List.of(
+            "light", "normal", "spec", "shadow", "noise", "depth", "overlay", "colortex", "gaux");
     private static final AtomicLong TERRAIN_BASIC_REWRITES = new AtomicLong();
     private static final AtomicLong TERRAIN_GRAD_REWRITES = new AtomicLong();
     private static final AtomicLong TERRAIN_LOD_REWRITES = new AtomicLong();
-    private static final AtomicLong TERRAIN_FILTERED_LEAKS = new AtomicLong();
+    private static final AtomicLong TERRAIN_AUXILIARY_READS = new AtomicLong();
     private static final AtomicLong TERRAIN_RAW_FETCHES = new AtomicLong();
     private static volatile String lastTerrainSampler = "none";
 
+    private static final String PARAMETER_NAME = "[A-Za-z_][A-Za-z0-9_]*";
+    private static final String SAMPLER_PARAMETER = "\\s*sampler2D\\s+" + PARAMETER_NAME;
+    private static final String UV_PARAMETER = "\\s*,\\s*vec2\\s+" + PARAMETER_NAME;
     private static final Pattern SIX_ARG_SAMPLE_NEAREST = Pattern.compile(
-            "\\bvec4\\s+sampleNearest\\s*\\("
-                    + "\\s*sampler2D\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\)"
-    );
-
+            "\\bvec4\\s+sampleNearest\\s*\\(" + SAMPLER_PARAMETER + UV_PARAMETER.repeat(5) + "\\s*\\)");
     private static final Pattern THREE_ARG_SAMPLE_RGSS = Pattern.compile(
-            "\\bvec4\\s+sampleRGSS\\s*\\("
-                    + "\\s*sampler2D\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*,"
-                    + "\\s*vec2\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\)"
-    );
-
+            "\\bvec4\\s+sampleRGSS\\s*\\(" + SAMPLER_PARAMETER + UV_PARAMETER.repeat(2) + "\\s*\\)");
     private static final Pattern UNIFORM_SAMPLER_2D = Pattern.compile(
             "\\buniform\\s+(?:(?:lowp|mediump|highp|readonly|writeonly|coherent|volatile|restrict)\\s+)*"
-                    + "sampler2D\\s+([A-Za-z_][A-Za-z0-9_]*)"
-    );
-
+                    + "sampler2D\\s+(" + PARAMETER_NAME + ")");
     private static final Pattern MAIN_FUNCTION = Pattern.compile("\\bvoid\\s+main\\s*\\(");
+    private static final Pattern VERSION = Pattern.compile("(?m)^[\\t ]*#version\\b");
 
-    /** Default Sodium path: replace Sodium's own helper after imports have been resolved. */
+    private SmoothBlocksShaderPatch() {}
+
+    /** Sodium imports must already be expanded; original helpers remain available to fallback modes. */
     public static String patchSodiumFragment(String source) {
         if (source == null || source.contains(TERRAIN_MARKER)) return source;
-
-        Matcher matcher = SIX_ARG_SAMPLE_NEAREST.matcher(source);
-        if (!matcher.find()) return source;
-
-        int start = matcher.start();
-        int brace = source.indexOf('{', matcher.end());
-        if (brace < 0) return source;
-        int end = findMatchingBrace(source, brace);
-        if (end < 0) return source;
-
-        String originalFunction = source.substring(start, end);
-        String renamedOriginal = originalFunction.replaceFirst(
-                "vec4\\s+sampleNearest\\s*\\(",
-                "vec4 smoothblocks_OriginalNearest("
-        );
-
-        String injected = terrainShaderHelpers() + "\n" + renamedOriginal + "\n" + sodiumWrapperFunction();
-        String patched = source.substring(0, start) + injected + source.substring(end);
-        return patchSodiumRgss(patched);
+        String patched = wrapFunction(source, SIX_ARG_SAMPLE_NEAREST, "sampleNearest",
+                "smoothblocks_OriginalNearest", terrainShaderHelpers(), sodiumWrapperFunction());
+        if (patched.equals(source)) return source;
+        return wrapFunction(patched, THREE_ARG_SAMPLE_RGSS, "sampleRGSS",
+                "smoothblocks_OriginalRGSS", "", sodiumRgssWrapperFunction());
     }
 
-    /**
-     * Sodium can route terrain through sampleRGSS(), which mixes sampleNearest() with
-     * textureLod(). If left untouched, XBRZ mode is therefore blended with RGSS on
-     * parts of the same static sprite. XBRZ must bypass RGSS completely.
-     */
-    private static String patchSodiumRgss(String source) {
-        Matcher matcher = THREE_ARG_SAMPLE_RGSS.matcher(source);
-        if (!matcher.find()) return source;
-
-        int start = matcher.start();
-        int brace = source.indexOf('{', matcher.end());
-        if (brace < 0) return source;
-        int end = findMatchingBrace(source, brace);
+    private static String wrapFunction(String source, Pattern signature, String name,
+                                       String originalName, String helpers, String wrapper) {
+        String code = SmoothBlocksShaderSyntax.codeOnly(source);
+        Matcher function = signature.matcher(code);
+        if (!function.find()) return source;
+        int opening = code.indexOf('{', function.end());
+        if (opening < 0) return source;
+        int end = SmoothBlocksShaderSyntax.closingBrace(code, opening);
         if (end < 0) return source;
-
-        String originalFunction = source.substring(start, end);
-        String renamedOriginal = originalFunction.replaceFirst(
-                "vec4\\s+sampleRGSS\\s*\\(",
-                "vec4 smoothblocks_OriginalRGSS("
-        );
-        return source.substring(0, start) + renamedOriginal + "\n"
-                + sodiumRgssWrapperFunction() + source.substring(end);
+        String original = source.substring(function.start(), end)
+                .replaceFirst("\\b" + name + "\\s*\\(", originalName + "(");
+        return source.substring(0, function.start()) + helpers + "\n" + original + "\n" + wrapper + source.substring(end);
     }
 
-    /**
-     * Iris terrain must be patched only AFTER Iris/Sodium finished transforming the
-     * shaderpack source.  Earlier versions rewrote texture calls before Iris' AST
-     * pass; that let our custom call participate in transformations intended for the
-     * shaderpack's original sampling graph and made auxiliary atlas reads (POM,
-     * generated normals, material probes) indistinguishable from the final albedo
-     * read.  The validated xBRZ filter belongs only on final, direct diffuse reads.
-     */
+    /** Run after Iris AST transforms so reconstruction cannot feed back into helper UV/material probes. */
     public static String patchIrisTerrainFragmentPostTransform(String source) {
         if (source == null || source.contains(TERRAIN_MARKER)) return source;
-        String marked = rewriteTerrainMainSamples(source);
-        if (marked.equals(source)) return source;
-        return injectAfterHeader(marked, terrainShaderHelpers() + "\n" + terrainDirectSamplerFunctions());
+        String patched = rewriteTerrainMainSamples(source);
+        if (patched.equals(source)) return source;
+        return injectAfterHeader(patched, terrainShaderHelpers() + "\n" + terrainDirectSamplerFunctions());
     }
 
-    /** Kept for binary/source compatibility with older local harnesses; no pre-AST rewrite. */
-    public static String markIrisTerrainSamples(String source) {
-        return source;
-    }
-
-    /** Kept for binary/source compatibility; the real Iris patch is post-transform now. */
-    public static String finishIrisTerrainFragment(String source) {
-        return patchIrisTerrainFragmentPostTransform(source);
-    }
-
-    /** Iris phase 1 for entity/armor/hand programs. */
     public static String markIrisEntitySamples(String shaderName, String source) {
         if (!isEntityShaderName(shaderName) || source == null || source.contains(ENTITY_MARKER)
                 || source.contains(ENTITY_CALL + "(")) return source;
-        return rewriteDiffuseSamples(source, ENTITY_CALL);
+        return rewriteDiffuseSamples(source);
     }
 
-    /** Iris phase 2: inject the common p1 kernel after Iris has rewritten the source. */
+    /** Entity calls are marked before Iris transforms; helpers are inserted afterward. */
     public static String finishIrisEntityFragment(String source) {
         if (source == null || source.contains(ENTITY_MARKER) || !source.contains(ENTITY_CALL + "(")) return source;
         return injectAfterHeader(source, entityShaderHelpers());
     }
 
-    /** Vanilla/Mojang entity shader path when Iris does not transform the program. */
     public static String patchVanillaEntityFragmentDirect(String shaderName, String source) {
         if (!isEntityShaderName(shaderName) || source == null || source.contains(ENTITY_MARKER)) return source;
-        String marked = rewriteDiffuseSamples(source, ENTITY_CALL);
-        if (marked.equals(source)) return source;
-        return injectAfterHeader(marked, entityShaderHelpers());
+        String patched = rewriteDiffuseSamples(source);
+        return patched.equals(source) ? source : injectAfterHeader(patched, entityShaderHelpers());
     }
 
     public static boolean isEntityShaderName(String shaderName) {
         if (shaderName == null) return false;
-        String s = shaderName.toLowerCase(Locale.ROOT);
-        if (s.contains("gui") || s.contains("text") || s.contains("particle")) return false;
-        return s.contains("entit") || s.contains("armor") || s.contains("eyes")
-                || s.contains("hand") || s.contains("item") || s.contains("energy_swirl") || s.contains("breeze_wind");
+        String name = shaderName.toLowerCase(Locale.ROOT);
+        if (name.contains("gui") || name.contains("text") || name.contains("particle")) return false;
+        return name.contains("entit") || name.contains("armor") || name.contains("eyes")
+                || name.contains("hand") || name.contains("item") || name.contains("energy_swirl") || name.contains("breeze_wind");
     }
 
-    /**
-     * Rewrite diffuse atlas lookups that occur directly in main() only.
-     *
-     * Shaderpacks often sample the same atlas in helper functions for POM, generated
-     * normals, material detection or texel snapping. Replacing those reads with xBRZ
-     * changes the shaderpack's coordinate calculations and can make one block sample
-     * metadata from unrelated atlas sprites. That was the source of the apparently
-     * "animated"/missing islands seen inside static blocks in v1.6.1 diagnostics.
-     *
-     * Every direct diffuse-atlas fetch in main() can be a final albedo branch and is patched.
-     * Atlas reads inside helper functions are deliberately left untouched and, in XBRZ mode, see the forced NEAREST sampler
-     * rather than LINEAR. Thus a static block is never a LINEAR/xBRZ mixture.
-     */
-    private static String rewriteTerrainMainSamples(String source) {
-        Set<String> declared = new LinkedHashSet<>();
-        Matcher declaration = UNIFORM_SAMPLER_2D.matcher(source);
-        while (declaration.find()) declared.add(declaration.group(1));
-        if (declared.isEmpty()) return source;
+    private enum CallKind {
+        BASIC(TERRAIN_CALL, TERRAIN_BASIC_REWRITES),
+        GRAD(TERRAIN_GRAD_CALL, TERRAIN_GRAD_REWRITES),
+        LOD(TERRAIN_LOD_CALL, TERRAIN_LOD_REWRITES);
 
-        String sampler = chooseDiffuseSampler(declared);
+        final String replacement;
+        final AtomicLong count;
+
+        CallKind(String replacement, AtomicLong count) {
+            this.replacement = replacement;
+            this.count = count;
+        }
+    }
+
+    private record CallSite(int start, int end, CallKind kind) {}
+
+    private static String rewriteTerrainMainSamples(String source) {
+        String code = SmoothBlocksShaderSyntax.codeOnly(source);
+        String sampler = diffuseSampler(code);
         if (sampler == null) return source;
         lastTerrainSampler = sampler;
-
-        Matcher main = MAIN_FUNCTION.matcher(source);
+        Matcher main = MAIN_FUNCTION.matcher(code);
         if (!main.find()) return source;
-        int brace = source.indexOf('{', main.end());
-        if (brace < 0) return source;
-        int end = findMatchingBrace(source, brace);
+        int opening = code.indexOf('{', main.end());
+        if (opening < 0) return source;
+        int end = SmoothBlocksShaderSyntax.closingBrace(code, opening);
         if (end < 0) return source;
 
-        String body = source.substring(brace, end);
-        List<TerrainCallSite> mainCalls = findTerrainCalls(body, sampler);
-        if (mainCalls.isEmpty()) {
-            TERRAIN_FILTERED_LEAKS.addAndGet(countAllFilteredCalls(source, sampler));
-            TERRAIN_RAW_FETCHES.addAndGet(countRawFetches(source, sampler));
-            return source;
+        List<CallSite> calls = terrainCalls(code.substring(opening, end), sampler);
+        StringBuilder patched = new StringBuilder(source);
+        // Descending replacements preserve the offsets found in the masked source.
+        for (int i = calls.size() - 1; i >= 0; i--) {
+            CallSite call = calls.get(i);
+            patched.replace(opening + call.start, opening + call.end, call.kind.replacement);
+            call.kind.count.incrementAndGet();
         }
+        String output = patched.toString();
+        String remaining = SmoothBlocksShaderSyntax.codeOnly(output);
+        TERRAIN_AUXILIARY_READS.addAndGet(terrainCalls(remaining, sampler).size());
+        Pattern raw = Pattern.compile("\\btexelFetch[A-Za-z0-9_]*\\s*\\(\\s*" + Pattern.quote(sampler) + "\\s*,");
+        TERRAIN_RAW_FETCHES.addAndGet(raw.matcher(remaining).results().count());
+        return output;
+    }
 
-        // Patch every diffuse-atlas lookup that is directly in main(). v1.6.2 only
-        // patched calls whose UV expression text matched the first sample. Shaderpacks
-        // can select different final albedo coordinates per material (POM/parallax,
-        // alternate material branches), which left those branches on raw NEAREST and
-        // produced the remaining block-specific pixel islands. Helper-function probes
-        // remain untouched so xBRZ cannot feed back into coordinate/material logic.
-        StringBuilder patched = new StringBuilder(body);
-        long nb = 0, ng = 0, nl = 0;
-        int patchedCalls = 0;
-        for (int i = mainCalls.size() - 1; i >= 0; i--) {
-            TerrainCallSite call = mainCalls.get(i);
-            String replacement = switch (call.kind) {
-                case BASIC -> TERRAIN_CALL;
-                case GRAD -> TERRAIN_GRAD_CALL;
-                case LOD -> TERRAIN_LOD_CALL;
-            };
-            patched.replace(call.functionStart, call.functionEnd, replacement);
-            patchedCalls++;
-            switch (call.kind) {
-                case BASIC -> nb++;
-                case GRAD -> ng++;
-                case LOD -> nl++;
+    private static List<CallSite> terrainCalls(String code, String sampler) {
+        Pattern pattern = Pattern.compile("(?<![A-Za-z0-9_])"
+                + "(texture2DGradARB|texture2DGrad|textureGrad|texture2DLodARB|texture2DLod|textureLod|texture2D|texture)"
+                + "\\s*\\(\\s*" + Pattern.quote(sampler) + "\\s*,");
+        Matcher call = pattern.matcher(code);
+        List<CallSite> calls = new ArrayList<>();
+        while (call.find()) {
+            String name = call.group(1);
+            CallKind kind = name.contains("Grad") ? CallKind.GRAD : name.contains("Lod") ? CallKind.LOD : CallKind.BASIC;
+            calls.add(new CallSite(call.start(1), call.end(1), kind));
+        }
+        return calls;
+    }
+
+    private static String rewriteDiffuseSamples(String source) {
+        String code = SmoothBlocksShaderSyntax.codeOnly(source);
+        String sampler = diffuseSampler(code);
+        if (sampler == null) return source;
+        Pattern pattern = Pattern.compile("(?<![A-Za-z0-9_])(texture2D|texture)\\s*\\(\\s*"
+                + Pattern.quote(sampler) + "\\s*,");
+        Matcher call = pattern.matcher(code);
+        List<Integer> starts = new ArrayList<>();
+        List<Integer> ends = new ArrayList<>();
+        while (call.find()) {
+            starts.add(call.start(1));
+            ends.add(call.end(1));
+        }
+        StringBuilder patched = new StringBuilder(source);
+        for (int i = starts.size() - 1; i >= 0; i--) patched.replace(starts.get(i), ends.get(i), ENTITY_CALL);
+        return patched.toString();
+    }
+
+    /** Preferred names precede a conservative auxiliary-map exclusion heuristic. */
+    private static String diffuseSampler(String code) {
+        Set<String> declared = new LinkedHashSet<>();
+        Matcher uniform = UNIFORM_SAMPLER_2D.matcher(code);
+        while (uniform.find()) declared.add(uniform.group(1));
+        for (String name : DIFFUSE_NAMES) if (declared.contains(name)) return name;
+        return declared.stream().filter(name -> !auxiliarySampler(name)).findFirst().orElse(null);
+    }
+
+    private static boolean auxiliarySampler(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.equals("sampler1") || lower.equals("sampler2")
+                || AUXILIARY_NAMES.stream().anyMatch(lower::contains);
+    }
+
+    private static String injectAfterHeader(String source, String helpers) {
+        String code = SmoothBlocksShaderSyntax.codeOnly(source);
+        Matcher version = VERSION.matcher(code);
+        if (!version.find()) {
+            Matcher main = MAIN_FUNCTION.matcher(code);
+            return main.find() ? insert(source, main.start(), helpers) : source;
+        }
+        int cursor = nextLine(code, version.end());
+        while (cursor < code.length()) {
+            int end = nextLine(code, cursor);
+            String line = code.substring(cursor, end).trim();
+            if (!line.isEmpty() && !line.startsWith("#extension") && !line.startsWith("#pragma")) {
+                // A block comment may end midway through this line; insert before the first actual token.
+                while (cursor < end && Character.isWhitespace(code.charAt(cursor))) cursor++;
+                break;
             }
+            cursor = end;
         }
-        if (patchedCalls == 0) return source;
-
-        String out = source.substring(0, brace) + patched + source.substring(end);
-        TERRAIN_BASIC_REWRITES.addAndGet(nb);
-        TERRAIN_GRAD_REWRITES.addAndGet(ng);
-        TERRAIN_LOD_REWRITES.addAndGet(nl);
-
-        // These are intentional non-primary atlas reads. In XBRZ mode Iris' terrain
-        // sampler is forced to NEAREST, so leaving them alone cannot introduce LINEAR
-        // filtering into a static block's visible albedo.
-        TERRAIN_FILTERED_LEAKS.addAndGet(countAllFilteredCalls(out, sampler));
-        TERRAIN_RAW_FETCHES.addAndGet(countRawFetches(out, sampler));
-        return out;
+        return insert(source, cursor, helpers);
     }
 
-    private enum TerrainCallKind { BASIC, GRAD, LOD }
-
-    private record TerrainCallSite(int functionStart, int functionEnd,
-                                   TerrainCallKind kind, String uvExpression) {}
-
-    private static List<TerrainCallSite> findTerrainCalls(String source, String sampler) {
-        String q = Pattern.quote(sampler);
-        Pattern call = Pattern.compile(
-                "(?<![A-Za-z0-9_])"
-                        + "(texture2DGradARB|texture2DGrad|textureGrad|texture2DLodARB|texture2DLod|textureLod|texture2D|texture)"
-                        + "\\s*\\(\\s*" + q + "\\s*,"
-        );
-        Matcher m = call.matcher(source);
-        List<TerrainCallSite> result = new ArrayList<>();
-        while (m.find()) {
-            int uvStart = m.end();
-            int uvEnd = findArgumentEnd(source, uvStart);
-            if (uvEnd <= uvStart) continue;
-            String fn = m.group(1);
-            TerrainCallKind kind = fn.contains("Grad") ? TerrainCallKind.GRAD
-                    : fn.contains("Lod") ? TerrainCallKind.LOD : TerrainCallKind.BASIC;
-            result.add(new TerrainCallSite(m.start(1), m.end(1), kind,
-                    source.substring(uvStart, uvEnd)));
-        }
-        return result;
+    private static int nextLine(String source, int from) {
+        int newline = source.indexOf('\n', from);
+        return newline < 0 ? source.length() : newline + 1;
     }
 
-    /** Find the next top-level comma/closing paren of one GLSL argument expression. */
-    private static int findArgumentEnd(String source, int start) {
-        int paren = 0, bracket = 0, brace = 0;
-        boolean string = false;
-        char quote = 0;
-        for (int i = start; i < source.length(); i++) {
-            char c = source.charAt(i);
-            if (string) {
-                if (c == '\\') { i++; continue; }
-                if (c == quote) string = false;
-                continue;
-            }
-            if (c == '\'' || c == '"') { string = true; quote = c; continue; }
-            switch (c) {
-                case '(' -> paren++;
-                case ')' -> {
-                    if (paren == 0 && bracket == 0 && brace == 0) return i;
-                    paren--;
-                }
-                case '[' -> bracket++;
-                case ']' -> bracket--;
-                case '{' -> brace++;
-                case '}' -> brace--;
-                case ',' -> { if (paren == 0 && bracket == 0 && brace == 0) return i; }
-                default -> { }
-            }
-        }
-        return -1;
-    }
-
-    private static String normalizeExpression(String expression) {
-        return expression.replaceAll("\\s+", "");
-    }
-
-    private static long countAllFilteredCalls(String source, String sampler) {
-        return findTerrainCalls(source, sampler).size();
-    }
-
-    private static long countRawFetches(String source, String sampler) {
-        String q = Pattern.quote(sampler);
-        Pattern raw = Pattern.compile("(?<![A-Za-z0-9_])texelFetch[A-Za-z0-9_]*\\s*\\(\\s*" + q + "\\s*,");
-        return countMatches(raw, source);
-    }
-
-    private static long countMatches(Pattern pattern, String source) {
-        long n = 0;
-        Matcher m = pattern.matcher(source);
-        while (m.find()) n++;
-        return n;
+    private static String insert(String source, int offset, String helpers) {
+        return source.substring(0, offset) + "\n" + helpers + "\n" + source.substring(offset);
     }
 
     public static String terrainStatsString() {
         return "s=" + lastTerrainSampler
                 + " main=" + TERRAIN_BASIC_REWRITES.get() + "/" + TERRAIN_GRAD_REWRITES.get() + "/" + TERRAIN_LOD_REWRITES.get()
-                + " aux=" + TERRAIN_FILTERED_LEAKS.get() + "/" + TERRAIN_RAW_FETCHES.get();
+                + " aux=" + TERRAIN_AUXILIARY_READS.get() + "/" + TERRAIN_RAW_FETCHES.get();
     }
 
-    private static String chooseDiffuseSampler(Set<String> declared) {
-        for (String preferred : List.of("gtexture", "Sampler0", "u_BlockTex", "albedo", "diffuse", "diffuseTex", "texture", "tex")) {
-            if (declared.contains(preferred)) return preferred;
-        }
-        for (String name : declared) {
-            String n = name.toLowerCase(Locale.ROOT);
-            if (n.contains("light") || n.contains("normal") || n.contains("spec") || n.contains("shadow")
-                    || n.contains("noise") || n.contains("depth") || n.contains("overlay")
-                    || n.contains("colortex") || n.contains("gaux") || n.equals("sampler1") || n.equals("sampler2")) {
-                continue;
-            }
-            return name;
-        }
-        return null;
-    }
-
-    private static String rewriteNamedCalls(String source, Pattern call, String replacementFunction) {
-        Matcher matcher = call.matcher(source);
-        StringBuffer out = new StringBuffer(source.length() + 64);
-        int replacements = 0;
-        while (matcher.find()) {
-            String replacement = replacementFunction + "(" + matcher.group(1) + ",";
-            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
-            replacements++;
-        }
-        matcher.appendTail(out);
-        return replacements == 0 ? source : out.toString();
-    }
-
-    private static String rewriteDiffuseSamples(String source, String replacementFunction) {
-        Set<String> declared = new LinkedHashSet<>();
-        Matcher declaration = UNIFORM_SAMPLER_2D.matcher(source);
-        while (declaration.find()) declared.add(declaration.group(1));
-        if (declared.isEmpty()) return source;
-
-        List<String> candidates = new ArrayList<>();
-        // One diffuse/albedo sampler per shader is enough. Patching every sampler whose
-        // name merely looks plausible can accidentally run xBRZ over an auxiliary map.
-        for (String preferred : List.of("gtexture", "Sampler0", "u_BlockTex", "albedo", "diffuse", "diffuseTex", "texture", "tex")) {
-            if (declared.contains(preferred)) {
-                candidates.add(preferred);
-                break;
-            }
-        }
-        if (candidates.isEmpty()) {
-            for (String name : declared) {
-                String n = name.toLowerCase(Locale.ROOT);
-                if (n.contains("light") || n.contains("normal") || n.contains("spec") || n.contains("shadow")
-                        || n.contains("noise") || n.contains("depth") || n.contains("overlay")
-                        || n.contains("colortex") || n.contains("gaux") || n.equals("sampler1") || n.equals("sampler2")) {
-                    continue;
-                }
-                candidates.add(name);
-                break;
-            }
-        }
-        if (candidates.isEmpty()) return source;
-
-        String alternation = candidates.stream().map(Pattern::quote).reduce((a, b) -> a + "|" + b).orElseThrow();
-        Pattern call = Pattern.compile("(?<![A-Za-z0-9_])(?:texture2D|texture)\\s*\\(\\s*(" + alternation + ")\\s*,");
-        Matcher matcher = call.matcher(source);
-        StringBuffer out = new StringBuffer(source.length() + 64);
-        int replacements = 0;
-        while (matcher.find()) {
-            String replacement = replacementFunction + "(" + matcher.group(1) + ",";
-            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
-            replacements++;
-        }
-        matcher.appendTail(out);
-        return replacements == 0 ? source : out.toString();
-    }
-
-    /**
-     * Inject helper declarations immediately after the GLSL header, before any user
-     * function definitions.  Iris shaderpacks commonly call texture(...) from helper
-     * functions declared before main(); injecting only before main() therefore left
-     * our replacement function undeclared at the earlier call site and could make the
-     * whole shaderpack fail to compile (which in turn leaves Voxy with a 0x0 viewport).
-     */
-    private static String injectAfterHeader(String source, String helper) {
-        if (source == null || helper == null || helper.isEmpty()) return source;
-
-        int version = source.indexOf("#version");
-        if (version < 0) {
-            // Sodium's already-expanded default source can theoretically arrive without
-            // a visible version line.  In that case keep the old safe fallback.
-            Matcher main = MAIN_FUNCTION.matcher(source);
-            if (!main.find()) return source;
-            return source.substring(0, main.start()) + helper + "\n" + source.substring(main.start());
-        }
-
-        int insert = source.indexOf('\n', version);
-        if (insert < 0) insert = source.length();
-        else insert++;
-
-        // Keep immediately following #extension/#pragma directives ahead of our code.
-        // #version must remain the first directive in a GLSL translation unit.
-        int cursor = insert;
-        while (cursor < source.length()) {
-            int lineEnd = source.indexOf('\n', cursor);
-            if (lineEnd < 0) lineEnd = source.length();
-            String line = source.substring(cursor, lineEnd).trim();
-
-            if (line.isEmpty() || line.startsWith("#extension") || line.startsWith("#pragma")) {
-                cursor = lineEnd < source.length() ? lineEnd + 1 : lineEnd;
-                insert = cursor;
-                continue;
-            }
-            break;
-        }
-
-        return source.substring(0, insert) + helper + "\n" + source.substring(insert);
-    }
-
-    private static int findMatchingBrace(String source, int brace) {
-        int depth = 0;
-        for (int i = brace; i < source.length(); i++) {
-            char c = source.charAt(i);
-            if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) return i + 1;
-            }
-        }
-        return -1;
-    }
-
+    /** Shared reconstruction kernel; Java packing and GLSL decoding must use the same states and descriptor layout. */
     private static String terrainShaderHelpers() {
-        return """
+        String shader = """
                 /* SMOOTHBLOCKS_XBRZ_DIRECT_V13
                  * xBRZ Freescale: expensive edge classification is precomputed on CPU.
                  * This shader reconstructs directly at the projected screen resolution.
@@ -453,14 +240,12 @@ public final class SmoothBlocksShaderPatch {
                 uniform int smoothblocks_Mode;
                 uniform int smoothblocks_Debug;
 
-                const uint smoothblocks_META_MISSING = 65534u;
-                const uint smoothblocks_META_ANIMATED = 65535u;
+                const uint smoothblocks_META_MISSING = SB_MISSINGu;
+                const uint smoothblocks_META_ANIMATED = SB_ANIMATEDu;
                 const float smoothblocks_SQRT_HALF = 0.7071067811865476;
 
                 float smoothblocks_DistVisible(vec4 a, vec4 b) {
-                    // Alpha-aware extension of the validated p1 distance. The lower alpha weights the RGB term and the alpha difference is added
-                    // directly, matching the established xBRZ alpha distance. For
-                    // a.a==b.a==1 this is exactly the old YCbCr RGB distance.
+                    // Match CPU distance: lower-alpha-weighted YCbCr plus alpha difference.
                     const vec3 w = vec3(0.2627, 0.6780, 0.0593);
                     const float scaleB = 0.5 / (1.0 - w.b);
                     const float scaleR = 0.5 / (1.0 - w.r);
@@ -473,8 +258,7 @@ public final class SmoothBlocksShaderPatch {
                 }
 
                 float smoothblocks_LeftRatio(vec2 center, vec2 origin, vec2 direction, vec2 scale) {
-                    // Canonical Freescale p1 geometry, identical to the validated lab's
-                    // flat-image path: v = side * length(distv * scale).
+                    // Signed distance to the corner's blend line, scaled into screen pixels.
                     vec2 p0 = center - origin;
                     vec2 proj = direction * (dot(p0, direction) / dot(direction, direction));
                     vec2 distv = p0 - proj;
@@ -485,8 +269,7 @@ public final class SmoothBlocksShaderPatch {
                 }
 
                 vec2 smoothblocks_LocalScale(vec2 pixelSize, vec2 du, vec2 dv) {
-                    // Derivative magnitudes convert one source texel on each UV axis to
-                    // screen pixels. No full Jacobian is fed into the xBRZ kernel.
+                    // Per-axis derivative magnitudes map texels to screen pixels; epsilon guards degenerate UVs.
                     vec2 texelScreenSize = sqrt(du * du + dv * dv);
                     return pixelSize / max(texelScreenSize, vec2(1e-12));
                 }
@@ -512,6 +295,7 @@ public final class SmoothBlocksShaderPatch {
                     return raw.r | (raw.g << 8u);
                 }
 
+                // Extra indices begin below the source atlas and count 16-bit cells, not bytes.
                 uint smoothblocks_ExtraMeta(uint index, ivec2 sourceSize) {
                     return smoothblocks_RawMeta(ivec2(int(index % uint(sourceSize.x)),
                         sourceSize.y + int(index / uint(sourceSize.x))));
@@ -522,24 +306,21 @@ public final class SmoothBlocksShaderPatch {
                     uint meta = smoothblocks_RawMeta(texel);
                     // State 7 is unused by xBRZ; its remaining bits address a sprite descriptor.
                     if ((meta & 7u) != 7u || meta == smoothblocks_META_ANIMATED) return meta;
-                    uint descriptor = (meta >> 3u) * 6u;
+                    uint descriptor = (meta >> SB_MARKER_SHIFTu) * SB_DESCRIPTOR_CELLSu;
                     ivec2 origin = ivec2(smoothblocks_ExtraMeta(descriptor, sourceSize),
                                          smoothblocks_ExtraMeta(descriptor + 1u, sourceSize));
                     uint widthFlags = smoothblocks_ExtraMeta(descriptor + 2u, sourceSize);
-                    uint width = widthFlags & 32767u;
-                    if ((widthFlags & 32768u) != 0u)
+                    uint width = widthFlags & SB_WIDTH_MASKu;
+                    if ((widthFlags & SB_WRAP_FLAGu) != 0u)
                         wrapBounds = ivec4(origin, int(width), int(smoothblocks_ExtraMeta(descriptor + 3u, sourceSize)));
-                    uint address = smoothblocks_ExtraMeta(descriptor + 4u, sourceSize)
-                        | (smoothblocks_ExtraMeta(descriptor + 5u, sourceSize) << 16u);
+                    uint address = smoothblocks_ExtraMeta(descriptor + SB_ADDRESS_CELLu, sourceSize)
+                        | (smoothblocks_ExtraMeta(descriptor + (SB_ADDRESS_CELLu + 1u), sourceSize) << 16u);
                     ivec2 local = texel - origin;
                     return smoothblocks_ExtraMeta(address + uint(local.y) * width + uint(local.x), sourceSize);
                 }
 
-                // Explicit level-0 bilinear filtering for animated atlas sprites. XBRZ
-                // keeps the hardware sampler NEAREST so static sprites can never become
-                // LINEAR through an unpatched texture() path. Atlas padding protects the
-                // four taps at sprite borders just as it does for Minecraft's normal
-                // linear filtering.
+                // Effects need explicit bilinear taps because the backing sampler stays nearest.
+                // Premultiplied mixing avoids hidden-RGB fringes; atlas padding supplies border taps.
                 vec4 smoothblocks_AnimatedLinear(sampler2D source, vec2 uv) {
                     ivec2 size = textureSize(source, 0);
                     vec2 tc = uv * vec2(size) - vec2(0.5);
@@ -563,6 +344,7 @@ public final class SmoothBlocksShaderPatch {
                 }
 
                 vec4 smoothblocks_Fetch(sampler2D source, ivec2 center, ivec2 offset, uint meta, ivec4 wrapBounds) {
+                    // Periodic descriptors wrap inside their own sprite; hard bits clamp isolated sprites.
                     if (wrapBounds.z > 0) {
                         ivec2 p = center + offset - wrapBounds.xy;
                         if (p.x < 0) p.x += wrapBounds.z;
@@ -581,6 +363,7 @@ public final class SmoothBlocksShaderPatch {
                 vec4 smoothblocks_Closer(vec4 center, vec4 a, vec4 b) {
                     float da = smoothblocks_DistVisible(center, a);
                     float db = smoothblocks_DistVisible(center, b);
+                    // Equality favors b, preserving the reference corner ordering.
                     return db <= da ? b : a;
                 }
 
@@ -634,16 +417,12 @@ public final class SmoothBlocksShaderPatch {
                     uint bl = smoothblocks_State(meta, 9u);
 
                     if (smoothblocks_Debug == 2) {
-                        // EDGES: cyan = at least one xBRZ corner state; dark gray = valid
-                        // static metadata with no edge. This directly tests the classifier
-                        // and atlas alignment without relying on subjective smoothing.
+                        // EDGES: cyan = classified edge; dark gray = valid metadata without an edge.
                         bool hasEdge = (tl | tr | br | bl) != 0u;
                         return hasEdge ? vec4(0.0, 1.0, 1.0, 1.0) : vec4(0.08, 0.08, 0.08, 1.0);
                     }
 
-                    // Canonical validated Freescale p1: always begin from the center
-                    // texel E. Only the four xBRZ corner operations may change the result.
-                    // No bilinear/linear base is allowed here.
+                    // Start from E; compose corners in reference order BR, BL, TR, TL. Order affects overlapping blends.
                     vec3 resPremul = E.rgb * E.a;
                     float resAlpha = E.a;
 
@@ -707,17 +486,22 @@ public final class SmoothBlocksShaderPatch {
                                 smoothblocks_LeftRatio(pos, origin, direction, scale));
                     }
 
-                    // Straight-alpha output reconstructed from premultiplied RGBA.
-                    // On opaque sprites resAlpha is exactly 1 and this reduces to the
-                    // validated RGB-only p1 result. On cutout/translucent silhouettes the
-                    // same xBRZ edge geometry now drives alpha as well.
+                    // Return straight alpha; guard division at transparent silhouettes.
                     vec3 outRgb = resAlpha > 1e-6 ? resPremul / resAlpha : E.rgb;
                     return vec4(clamp(outRgb, 0.0, 1.0), clamp(resAlpha, 0.0, 1.0));
                 }
                 """;
+        return shader
+                .replace("SB_MISSING", Integer.toString(SmoothBlocksMetadataFormat.MISSING))
+                .replace("SB_ANIMATED", Integer.toString(SmoothBlocksMetadataFormat.ANIMATED_LINEAR))
+                .replace("SB_MARKER_SHIFT", Integer.toString(SmoothBlocksMetadataFormat.MARKER_SHIFT))
+                .replace("SB_DESCRIPTOR_CELLS", Integer.toString(SmoothBlocksMetadataFormat.DESCRIPTOR_CELLS))
+                .replace("SB_WIDTH_MASK", Integer.toString(SmoothBlocksMetadataFormat.WIDTH_MASK))
+                .replace("SB_WRAP_FLAG", Integer.toString(SmoothBlocksMetadataFormat.WRAP_FLAG))
+                .replace("SB_ADDRESS_CELL", Integer.toString(SmoothBlocksMetadataFormat.ADDRESS_CELL));
     }
 
-
+    /** xBRZ always reconstructs level 0; bias/LOD affect only the original sampling fallback. */
     private static String terrainDirectSamplerFunctions() {
         return """
                 vec4 smoothblocks_TerrainSample(sampler2D source, vec2 uv) {
@@ -789,9 +573,8 @@ public final class SmoothBlocksShaderPatch {
                 """;
     }
 
+    /** Reuse the terrain kernel under an entity uniform namespace so reconstruction stays identical. */
     private static String entityShaderHelpers() {
-        // One canonical p1 implementation for terrain, entities and world items.
-        // Only the uniform namespace differs; classification always runs at resource load.
         String shared = terrainShaderHelpers()
                 .replace(TERRAIN_MARKER, ENTITY_MARKER)
                 .replace("smoothblocks_", "smoothblocks_Entity");

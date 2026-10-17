@@ -15,9 +15,6 @@ public final class RegressionHarness {
             require(!patched.equals(original), "Original " + name + " shader must be patched");
             require(patched.equals(SmoothBlocksShaderPatch.patchVanillaEntityFragmentDirect("minecraft:core/" + name, patched)), "Patching must be idempotent");
             require(patched.contains("uniform usampler2D smoothblocks_EntityMeta"), "Precomputed metadata must be used");
-            require(!patched.contains("smoothblocks_EStates("), "No fragment-time classifier");
-            require(patched.contains("smoothblocks_EntityFetch"), "Shared bounded reconstruction");
-            require(!patched.contains("color.a = center.a"), "Item alpha must use the shared reconstruction");
         }
         for (String name : new String[]{"gui", "gui_item", "rendertype_text", "particle", "position_tex"}) {
             String source = "#version 330\nuniform sampler2D Sampler0; void main(){vec4 c=texture(Sampler0,vec2(0));}";
@@ -54,12 +51,14 @@ public final class RegressionHarness {
         }
     }
 
+    /** Inspects bytecode descriptors without loading target classes or initializing the renderer. */
     private static void method(String owner, String name, String descriptor) throws Exception {
         ClassNode cls = new ClassNode(Opcodes.ASM9);
         new ClassReader(resource(owner + ".class")).accept(cls, ClassReader.SKIP_CODE);
         require(cls.methods.stream().anyMatch(m -> m.name.equals(name) && m.desc.equals(descriptor)), "Missing hook " + owner + "." + name + descriptor);
     }
 
+    /** Only invisible RGB differs; classifier output must be insensitive to those hidden colors. */
     private static void alphaInvariance() {
         int[] a = new int[64], b = new int[64];
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {

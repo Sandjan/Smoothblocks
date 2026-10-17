@@ -11,9 +11,10 @@ import net.minecraft.client.resources.model.geometry.QuadCollection;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
+/** Limits wall tagging to side-face baking; try/finally prevents state leaking into later builder additions. */
 @Mixin(ItemModelGenerator.class)
 public abstract class ItemModelGeneratorMixin {
-    // Wrap the caller, not the body Sodium replaces. Front/back faces are already collected here.
+    // Sodium replaces the callee body; the caller hook also runs after front/back faces were collected.
     @WrapOperation(method = "bakeExtrudedSprite", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/resources/model/cuboid/ItemModelGenerator;bakeSideFaces(Lnet/minecraft/client/resources/model/geometry/QuadCollection$Builder;Lnet/minecraft/client/resources/model/ModelBaker$Interner;Lnet/minecraft/client/renderer/block/dispatch/ModelState;Lnet/minecraft/client/resources/model/geometry/BakedQuad$MaterialInfo;)V"))
     private static void smoothblocks$collectSides(QuadCollection.Builder builder, ModelBaker.Interner interner,

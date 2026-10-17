@@ -1,7 +1,6 @@
 package de.oai.smoothblocks.mixin;
 
 import de.oai.smoothblocks.SmoothBlocksAlphaEdgeRepair;
-import de.oai.smoothblocks.SmoothBlocksClient;
 import de.oai.smoothblocks.SmoothBlocksTextureMetadata;
 import net.minecraft.client.renderer.texture.ReloadableTexture;
 import net.minecraft.client.renderer.texture.TextureContents;
@@ -11,11 +10,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * Repairs hidden RGB on fully transparent edge pixels before an individual
- * entity/armor texture is uploaded. Hardware linear filtering then has a
- * sensible edge color instead of interpolating transparent black.
- */
+/** Repairs entity/armor RGB before upload; captures entity/armor/equipment metadata after upload completes. */
 @Mixin(ReloadableTexture.class)
 public abstract class ReloadableTextureMixin {
     @Inject(method = "apply", at = @At("TAIL"))
@@ -40,9 +35,6 @@ public abstract class ReloadableTextureMixin {
             return;
         }
 
-        int repaired = SmoothBlocksAlphaEdgeRepair.repair(contents);
-        if (repaired > 0) {
-            SmoothBlocksClient.noteEntityAlphaEdgeRepair(repaired, id.toString());
-        }
+        SmoothBlocksAlphaEdgeRepair.repair(contents);
     }
 }

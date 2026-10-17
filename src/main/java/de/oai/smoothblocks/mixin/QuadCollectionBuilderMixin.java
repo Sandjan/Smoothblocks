@@ -10,6 +10,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+/** Builder-local collection state tags generated walls without mixing concurrent model bakes. */
 @Mixin(QuadCollection.Builder.class)
 public abstract class QuadCollectionBuilderMixin implements SmoothBlocksSideCollector {
     @Unique private boolean smoothblocks$collectingSides;
